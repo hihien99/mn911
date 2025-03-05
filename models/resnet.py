@@ -6,7 +6,7 @@ from typing import List, Optional, Type, Union, Callable
 import torch
 import torch.nn as nn
 
-__all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50']
+__all__ = ['ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet']
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:

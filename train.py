@@ -1,43 +1,42 @@
 """
-Train script for ResNet18 model on Cifar10 dataset.
+Train script for ResNet18 model on CIFAR10 dataset.
 
 Usage:
-    python train.py --dataset cifar10 --model resnet18 --data_mean [0.485,0.456,0.406] --data_std [0.229,0.224,0.225] --img_size 32 --epochs 35 --img_channels 3 --device cuda:0
+    python train.py resnet18 --dataset cifar10 --model resnet18 --epochs 50 --device cuda:0
 """
 
 import argparse
 import os
 import random
-import sys
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 import torch
-import torch.nn as nn
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
-from models import *
-from utils.utils import tuple_inst
+import models
+from losses import *
+from utils import tuple_inst
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    project_root = os.path.dirname(__file__)
 
-    parser.add_argument('--dataset', required=True,
-                        help='cifar10 | mnist')
+    parser.add_argument('exp', type=str, nargs='?', default=None,
+                        help='experiment name')
+    parser.add_argument('--dataset', required=True, default='cifar10',
+                        help='dataset to train on: cifar10 | mnist')
     parser.add_argument('--dataroot', default=os.path.join(project_root, 'data'),
                         help='path to dataset')
-    parser.add_argument('--data_mean', type=tuple_inst(float), default=None)
-    parser.add_argument('--data_std', type=tuple_inst(float), default=None)
+    parser.add_argument('--data_mean', type=tuple_inst(float), default=[0.4914, 0.4822, 0.4465])
+    parser.add_argument('--data_std', type=tuple_inst(float), default=[0.2471, 0.2435, 0.2616])
     parser.add_argument('--workers', type=int,
                         help='number of data loading workers', default=2)
     parser.add_argument('--batch_size', type=int, default=128,
                         help='input batch size')
-    parser.add_argument('--img_channels', type=int, default=1,
+    parser.add_argument('--img_channels', type=int, default=3,
                         help='Number of image channels.')
-    parser.add_argument('--img_size', type=int, default=28,
+    parser.add_argument('--img_size', type=int, default=32,
                         help='the height / width of the input image to network')
     parser.add_argument('--num_classes', type=int, default=10,
                         help='number of classes in dataset')
@@ -45,15 +44,17 @@ def parse_args():
                         help='number of epochs to train for')
     parser.add_argument('--model', required=True,
                         help='baseline | resnet18 | resnet34 | resnet50')
+    parser.add_argument('--weights', default='',
+                        help='path to pre-trained weights (to continue training)')
     parser.add_argument('--lr', type=float, default=0.001,
                         help='learning rate, default=0.001')
     parser.add_argument('--device', default='cuda:0',
                         help='device to use for training')
-    parser.add_argument('--net', default='',
-                        help='path to net (to continue training)')
-    parser.add_argument('--outf', default='outputs',
+    parser.add_argument('--output_dir', default='outputs',
                         help='folder to output images and model checkpoints')
-    parser.add_argument('--save_freq', type=int, default=1,
+    parser.add_argument('--save_freq', type=int, default=5,
+                        help='save frequency (epochs)')
+    parser.add_argument('--eval_freq', type=int, default=5,
                         help='save frequency (epochs)')
     parser.add_argument('--manual_seed', type=int, default=None,
                         help='manual seed')
@@ -65,14 +66,14 @@ def parse_args():
 
 def main():
     params = parse_args()
-    device = torch.device(params.device)
-    os.makedirs(params.outf, exist_ok=True)
+    params.device = torch.device(params.device)
+    os.makedirs(params.output_dir, exist_ok=True)
 
     if params.manual_seed is not None:
         print('Random Seed: ', params.manual_seed)
         random.seed(params.manual_seed)
         torch.manual_seed(params.manual_seed)
-        if device.type.startswith('cuda'):
+        if params.device.type.startswith('cuda'):
             torch.cuda.manual_seed(params.manual_seed)
 
     # dataset & data loader
@@ -95,64 +96,68 @@ def main():
     assert train_dataset, test_dataset
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=int(params.workers))
+        train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=params.workers)
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=params.batch_size, shuffle=False, num_workers=int(params.workers))
+        test_dataset, batch_size=params.batch_size, shuffle=False, num_workers=params.workers)
 
     # model
-    if params.model == 'baseline':
-        model = Baseline(img_channels=params.img_channels,
-                         num_classes=params.num_classes).to(device)
-    elif params.model == 'resnet18':
-        model = resnet18(num_classes=params.num_classes,
-                         img_channels=params.img_channels).to(device)
-    elif params.model == 'resnet34':
-        model = resnet34(num_classes=params.num_classes,
-                         img_channels=params.img_channels).to(device)
-    else:
-        model = resnet50(num_classes=params.num_classes,
-                         img_channels=params.img_channels).to(device)
-    
-    if params.net != '':
-        model.load_state_dict(torch.load(params.net))
+    try:
+        model = getattr(models, params.model)(
+            img_channels=params.img_channels, num_classes=params.num_classes).to(params.device)
+    except:
+        raise ValueError(f'Model {params.model} is not defined')
+
+    if params.weights != '':
+        model.load_state_dict(torch.load(params.weights))
 
     # loss
-    criterion = nn.CrossEntropyLoss()
+    criterion = torch.nn.CrossEntropyLoss()
+    # criterion = CombinedMarginLoss()
     # optim
-    optimizer = torch.optim.Adam(model.parameters(), lr=params.lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, params.epochs)
 
-    os.makedirs(f'{params.outf}/{params.dataset}/{params.model}', exist_ok=True)
-    # train loop
-    for epoch in range(params.epochs):
-        model.train()
-        for batch_idx, (X, y) in enumerate(train_loader):
-            optimizer.zero_grad()
-            X = X.to(device)
-            y = y.to(device)
+    # create output directory
+    output_dir = params.output_dir
+    if params.exp is not None:
+        output_dir = os.path.join(params.output_dir, params.exp)
+    os.makedirs(output_dir, exist_ok=True)
 
-            logits = model(X)
-            loss = criterion(logits, y)
-            loss.backward()
-            optimizer.step()
+    # training loop
+    for epoch in range(1, params.epochs + 1):
+        train_loop(train_loader, model, criterion, optimizer, epoch, params)
+        if lr_scheduler is not None:
+            lr_scheduler.step(epoch - 1)
+        if epoch % params.save_freq == 0:
+            torch.save(model.state_dict(), f'{output_dir}/{params.model}_{epoch:03d}.pth')
+        if epoch % params.eval_freq == 0:
+            print(f'> [Epoch: {epoch + 1:03d}/{params.epochs:03d}]'
+                  f' test_acc={eval_loop(model, test_loader, params):.3f}')
 
-            if not batch_idx % 100:
-                print(f'[Epoch {epoch + 1:03d}/{params.epochs:03d} - {batch_idx:04d}/{len(train_loader):04d}]'
-                      f' loss={loss:.4f}')
 
-        model.eval()
-        print(f'[Epoch: {epoch + 1:03d}/{params.epochs:03d}]'
-              f' test_acc={eval_loop(model, test_loader, device=device):.3f}')
+def train_loop(train_loader, model, criterion, optimizer, epoch, params):
+    model.train()
+    for batch_idx, (X, y) in enumerate(train_loader):
+        optimizer.zero_grad()
+        X = X.to(params.device)
+        y = y.to(params.device)
 
-        # do checkpointing
-        torch.save(model.state_dict(), f'{params.outf}/{params.dataset}/{params.model}/{params.model}_{epoch:03d}.pth')
+        logits = model(X)
+        loss = criterion(logits, y)
+        loss.backward()
+        optimizer.step()
+        if batch_idx % 100 == 0:
+            print(f'- [Epoch {epoch:03d}/{params.epochs:03d} - {batch_idx:04d}/{len(train_loader):04d}]'
+                  f' loss={loss:.4f}')
 
 
 @torch.no_grad()
-def eval_loop(model, data_loader, device):
+def eval_loop(model, data_loader, params):
+    model.eval()
     correct_pred, num_examples = 0, 0
     for i, (features, targets) in enumerate(data_loader):
-        features = features.to(device)
-        targets = targets.to(device)
+        features = features.to(params.device)
+        targets = targets.to(params.device)
 
         probs = model(features).softmax(1)
         predicted_labels = probs.argmax(1)

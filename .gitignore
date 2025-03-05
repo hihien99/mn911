@@ -355,6 +355,6 @@ wheelhouse/
 .venv/
 
 # This project
-data/
+data*
 develop/
 *outputs/

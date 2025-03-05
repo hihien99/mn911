@@ -1,2 +1,2 @@
-from .baseline import Baseline
-from .resnet import ResNet, resnet18, resnet34, resnet50
+from .baseline import *
+from .resnet import *

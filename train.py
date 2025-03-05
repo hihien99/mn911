@@ -13,9 +13,9 @@ import torch
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
-from losses import *
 import models
 import optim
+from losses import *
 from utils import tuple_inst
 
 
@@ -86,6 +86,8 @@ def main():
         root=params.dataroot, download=True,
         train=True,
         transform=transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(params.data_mean, params.data_std),
         ])
@@ -97,7 +99,8 @@ def main():
             transforms.Normalize(params.data_mean, params.data_std),
         ])
     )
-    assert train_dataset, test_dataset
+    print('Train set:', train_dataset)
+    print('Test set:', test_dataset)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=params.workers)
@@ -112,8 +115,8 @@ def main():
         raise ValueError(f'Model {params.model} is not defined')
 
     if params.weights != '':
-        model.load_state_dict(torch.load(params.weights))
-    print(model)
+        model.load_state_dict(
+            torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
 
     # loss
     if params.use_arcface:
@@ -144,7 +147,7 @@ def main():
         if epoch % params.save_freq == 0:
             torch.save(model.state_dict(), f'{output_dir}/{params.model}_{epoch:03d}.pth')
         if epoch % params.eval_freq == 0:
-            print(f'> [Epoch: {epoch + 1:03d}/{params.epochs:03d}]'
+            print(f'> [Epoch: {epoch:03d}/{params.epochs:03d}]'
                   f' test_acc={eval_loop(model, test_loader, params):.3f}')
 
 
@@ -171,16 +174,15 @@ def train_loop(train_loader, model, criterion, optimizer, epoch, params):
 @torch.no_grad()
 def eval_loop(model, data_loader, params):
     model.eval()
-    correct_pred, num_examples = 0, 0
-    for i, (features, targets) in enumerate(data_loader):
-        features = features.to(params.device)
-        targets = targets.to(params.device)
+    correct_pred = 0
+    for batch_idx, (X, y) in enumerate(data_loader):
+        X = X.to(params.device)
+        y = y.to(params.device)
 
-        probs = model(features).softmax(1)
-        predicted_labels = probs.argmax(1)
-        num_examples += targets.size(0)
-        correct_pred += (predicted_labels == targets).sum()
-    return correct_pred.float() / num_examples * 100
+        logits = model(X)
+        preds = logits.argmax(1)
+        correct_pred += torch.sum(preds.eq(y)).item()
+    return correct_pred.float() / len(data_loader.dataset) * 100
 
 
 if __name__ == '__main__':

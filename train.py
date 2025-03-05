@@ -47,7 +47,7 @@ def parse_args():
                         help='baseline | resnet18 | resnet34 | resnet50')
     parser.add_argument('--weights', default='',
                         help='path to pre-trained weights (to continue training)')
-    parser.add_argument('--loss', choices=['ce', 'focal', 'sphereface', 'cosface', 'arcface'],
+    parser.add_argument('--loss', choices=['ce', 'focal', 'sphereface', 'cosface', 'arcface', 'adaface'],
                         default='ce',
                         help='loss function to be used')
 
@@ -129,12 +129,14 @@ def main():
         clf_layer = None
         for m in model.modules():
             clf_layer = m  # get the last layer
-        if params.loss == 'arcface':
-            criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+        if params.loss == 'sphereface':
+            criterion = SphereFace(clf_layer.in_features, params.num_classes).to(params.device)
         elif params.loss == 'cosface':
             criterion = CosFace(clf_layer.in_features, params.num_classes).to(params.device)
-        elif params.loss == 'sphereface':
-            criterion = SphereFace(clf_layer.in_features, params.num_classes).to(params.device)
+        elif params.loss == 'arcface':
+            criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+        elif params.loss == 'adaface':
+            criterion = AdaFace(clf_layer.in_features, params.num_classes).to(params.device)
         del clf_layer
     print('Loss function:', criterion)
 

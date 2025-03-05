@@ -31,18 +31,21 @@ class MarginCELoss(nn.Module):
         output = self.compute_logits(input, target)
         return F.cross_entropy(output, target)
 
-    def patch(self, output_layer: nn.Linear) -> nn.Linear:
+    def patch_output_layer(self, output_layer: nn.Linear, remove_bias: bool = False) -> nn.Linear:
         r"""
         Update a `nn.Linear` classification layer with its weights.
         """
+        assert isinstance(output_layer, nn.Linear)
         output_layer.weight.data.copy_(F.normalize(self.weight))
         if output_layer.bias is not None:
-            output_layer.bias.data.fill_(0)
+            if remove_bias:
+                output_layer.register_parameter('bias', None)
+            else:
+                output_layer.bias.data.fill_(0)
         return output_layer
 
     def extra_repr(self) -> str:
-        return (f'in_features={self.in_features}, out_features={self.out_features}, '
-                f'margin={self.margin}')
+        return f'in_features={self.in_features}, out_features={self.out_features}'
 
 
 def myphi(x, m):
@@ -70,8 +73,6 @@ class SphereFace(MarginCELoss):
                  phi_flag: bool = True,
                  eps: float = 1e-7):
         super().__init__(in_features, out_features)
-        self.in_features = in_features
-        self.out_features = out_features
         self.margin = margin
         self.phi_flag = phi_flag
         self.eps = eps
@@ -111,6 +112,9 @@ class SphereFace(MarginCELoss):
         output = self.compute_logits(input, target)
         return my_F.focal_loss(output, target)
 
+    def extra_repr(self) -> str:
+        return f'margin={self.margin}, phi_flag={self.phi_flag}'
+
 
 class CosFace(MarginCELoss):
     r"""
@@ -136,7 +140,7 @@ class CosFace(MarginCELoss):
         return output
 
     def extra_repr(self) -> str:
-        return f'scale={self.scale}'
+        return f'scale={self.scale}, margin={self.margin}'
 
 
 class ArcFace(MarginCELoss):
@@ -182,7 +186,7 @@ class ArcFace(MarginCELoss):
         return output
 
     def extra_repr(self) -> str:
-        return f'scale={self.scale}, easy_margin={self.easy_margin}'
+        return f'scale={self.scale}, margin={self.margin}, easy_margin={self.easy_margin}'
 
 
 class CombinedMarginLoss(nn.Module):
@@ -238,6 +242,42 @@ class CombinedMarginLoss(nn.Module):
             raise
 
         return input
+
+
+class CurricularFace(MarginCELoss):
+    def __init__(self, in_features: int, out_features: int,
+                 scale: float = 64., margin: float = 0.5,
+                 eps: float = 1e-7):
+        super().__init__(in_features, out_features)
+        self.scale = scale
+        self.margin = margin
+        self.eps = eps
+
+        self.cos_m = math.cos(margin)
+        self.sin_m = math.sin(margin)
+        self.threshold = math.cos(math.pi - margin)
+        self.mm = math.sin(math.pi - margin) * margin
+        self.register_buffer('t', torch.zeros(1))
+
+    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        cos_theta = F.linear(F.normalize(input), F.normalize(self.weight)).clamp(-1 + self.eps, 1 - self.eps)
+        target_logit = cos_theta[torch.arange(0, input.size(0)), target].view(-1, 1)
+
+        sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
+        cos_theta_m = target_logit * self.cos_m - sin_theta * self.sin_m  # cos(target+margin)
+        mask = cos_theta > cos_theta_m
+        final_target_logit = torch.where(target_logit > self.threshold, cos_theta_m, target_logit - self.mm)
+
+        hard_example = cos_theta[mask]
+        with torch.no_grad():
+            self.t = target_logit.mean() * 0.01 + (1 - 0.01) * self.t
+        cos_theta[mask] = hard_example * (self.t + hard_example)
+        cos_theta.scatter_(1, target.view(-1, 1).long(), final_target_logit)
+        output = cos_theta * self.scale
+        return output
+
+    def extra_repr(self) -> str:
+        return f'scale={self.scale}, margin={self.margin}'
 
 
 class AdaFace(MarginCELoss):
@@ -298,3 +338,6 @@ class AdaFace(MarginCELoss):
         # scale
         output = cosine * self.scale
         return output
+
+    def extra_repr(self) -> str:
+        return f'scale={self.scale}, margin={self.margin}, h={self.h}'

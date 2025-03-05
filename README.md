@@ -9,7 +9,8 @@ These commands are used to train the ResNet18 model:
 ```cmd
 python train.py resnet18 --dataset cifar10 --model resnet18 --manual_seed 1 --batch_size 256 --epochs 50 --device cuda:0
 ```
-- With Margin-based Cross Entropy Losses (`sphereface | cosface | arcface | adaface`):
+- With Margin-based Cross Entropy Losses
+  _(available options are `sphereface | cosface | arcface | curricularface | adaface`)_:
 ```cmd
 python train.py resnet18 --dataset cifar10 --model resnet18 --manual_seed 1 --batch_size 256 --epochs 50 --loss [loss_name] --device cuda:0
 ```

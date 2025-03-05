@@ -47,7 +47,8 @@ def parse_args():
                         help='baseline | resnet18 | resnet34 | resnet50')
     parser.add_argument('--weights', default='',
                         help='path to pre-trained weights (to continue training)')
-    parser.add_argument('--loss', choices=['ce', 'focal', 'sphereface', 'cosface', 'arcface', 'adaface'],
+    parser.add_argument('--loss',
+                        choices=['ce', 'focal', 'sphereface', 'cosface', 'arcface', 'curricularface', 'adaface'],
                         default='ce',
                         help='loss function to be used')
 
@@ -135,6 +136,8 @@ def main():
             criterion = CosFace(clf_layer.in_features, params.num_classes).to(params.device)
         elif params.loss == 'arcface':
             criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+        elif params.loss == 'curricularface':
+            criterion = CurricularFace(clf_layer.in_features, params.num_classes).to(params.device)
         elif params.loss == 'adaface':
             criterion = AdaFace(clf_layer.in_features, params.num_classes).to(params.device)
         del clf_layer
@@ -154,7 +157,8 @@ def main():
     for epoch in range(1, params.epochs + 1):
         train_loop(train_loader, model, criterion, optimizer, epoch, params)
         if params.use_margin_loss:
-            criterion.patch(model.get_submodule('fc2' if params.model == 'baseline' else 'fc'))
+            criterion.patch_output_layer(model.get_submodule('fc2' if params.model == 'baseline' else 'fc'),
+                                         remove_bias=True)
         if lr_scheduler is not None:
             lr_scheduler.step()
         if epoch % params.save_freq == 0:

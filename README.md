@@ -11,7 +11,15 @@ python train.py resnet18 --dataset cifar10 --model resnet18 --manual_seed 1 --ba
 ```
 - With ArcFace Loss:
 ```cmd
-python train.py resnet18_arcface --dataset cifar10 --model resnet18 --manual_seed 1 --batch_size 256 --epochs 50 --use_arcface --device cuda:0
+python train.py resnet18_arcface --dataset cifar10 --model resnet18 --manual_seed 1 --batch_size 256 --epochs 50 --loss arcface --device cuda:0
+```
+- With CosFace Loss:
+```cmd
+python train.py resnet18_arcface --dataset cifar10 --model resnet18 --manual_seed 1 --batch_size 256 --epochs 50 --loss cosface --device cuda:0
+```
+- With SphereFace Loss:
+```cmd
+python train.py resnet18_arcface --dataset cifar10 --model resnet18 --manual_seed 1 --batch_size 256 --epochs 50 --loss sphereface --device cuda:0
 ```
 
 ### References

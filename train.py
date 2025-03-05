@@ -2,7 +2,7 @@
 Train script for ResNet model on CIFAR10 dataset.
 
 Usage:
-    python train.py resnet18 --dataset cifar10 --model resnet18 --batch_size 256 --epochs 50 --use_arcface --device cuda:0
+    python train.py resnet18 --dataset cifar10 --model resnet18 --batch_size 256 --epochs 100 --device cuda:0
 """
 
 import argparse
@@ -47,8 +47,9 @@ def parse_args():
                         help='baseline | resnet18 | resnet34 | resnet50')
     parser.add_argument('--weights', default='',
                         help='path to pre-trained weights (to continue training)')
-    parser.add_argument('--use_arcface', action='store_true',
-                        help='use ArcFace loss')
+    parser.add_argument('--loss', choices=['ce', 'focal', 'sphereface', 'cosface', 'arcface'],
+                        default='ce',
+                        help='loss function to be used')
 
     parser.add_argument('--lr', type=float, default=0.001,
                         help='learning rate, default=0.001')
@@ -64,6 +65,7 @@ def parse_args():
                         help='manual seed')
 
     params = parser.parse_args()
+    params.use_margin_loss = params.loss not in ['ce', 'focal']
     print(params)
     return params
 
@@ -119,14 +121,23 @@ def main():
             torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
 
     # loss
-    if params.use_arcface:
+    if params.loss == 'ce':
+        criterion = torch.nn.CrossEntropyLoss()
+    elif params.loss == 'focal':
+        criterion = FocalLoss()
+    else:
         clf_layer = None
         for m in model.modules():
-            clf_layer = m
-        criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+            clf_layer = m  # get the last layer
+        if params.loss == 'arcface':
+            criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+        elif params.loss == 'cosface':
+            criterion = CosFace(clf_layer.in_features, params.num_classes).to(params.device)
+        elif params.loss == 'sphereface':
+            criterion = SphereFace(clf_layer.in_features, params.num_classes).to(params.device)
         del clf_layer
-    else:
-        criterion = torch.nn.CrossEntropyLoss()
+    print('Loss function:', criterion)
+
     # optim
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
     lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.2), params.epochs)
@@ -140,7 +151,7 @@ def main():
     # training loop
     for epoch in range(1, params.epochs + 1):
         train_loop(train_loader, model, criterion, optimizer, epoch, params)
-        if params.use_arcface:
+        if params.use_margin_loss:
             criterion.patch(model.get_submodule('fc2' if params.model == 'baseline' else 'fc'))
         if lr_scheduler is not None:
             lr_scheduler.step()
@@ -158,7 +169,7 @@ def train_loop(train_loader, model, criterion, optimizer, epoch, params):
         X = X.to(params.device)
         y = y.to(params.device)
 
-        if params.use_arcface:
+        if isinstance(criterion, MarginCELoss):
             features = model.extract_features(X)
             loss = criterion(features, y)
         else:

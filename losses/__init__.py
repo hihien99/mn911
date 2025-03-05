@@ -1,2 +1,2 @@
-from .arcface import *
-from .cosface import *
+from .focal_loss import FocalLoss
+from .margin_ce_loss import *

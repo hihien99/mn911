@@ -1,8 +1,8 @@
 """
-Train script for ResNet18 model on CIFAR10 dataset.
+Train script for ResNet model on CIFAR10 dataset.
 
 Usage:
-    python train.py resnet18 --dataset cifar10 --model resnet18 --epochs 50 --device cuda:0
+    python train.py resnet18 --dataset cifar10 --model resnet18 --batch_size 256 --epochs 50 --use_arcface --device cuda:0
 """
 
 import argparse
@@ -13,8 +13,9 @@ import torch
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
-import models
 from losses import *
+import models
+import optim
 from utils import tuple_inst
 
 
@@ -46,6 +47,9 @@ def parse_args():
                         help='baseline | resnet18 | resnet34 | resnet50')
     parser.add_argument('--weights', default='',
                         help='path to pre-trained weights (to continue training)')
+    parser.add_argument('--use_arcface', action='store_true',
+                        help='use ArcFace loss')
+
     parser.add_argument('--lr', type=float, default=0.001,
                         help='learning rate, default=0.001')
     parser.add_argument('--device', default='cuda:0',
@@ -109,13 +113,20 @@ def main():
 
     if params.weights != '':
         model.load_state_dict(torch.load(params.weights))
+    print(model)
 
     # loss
-    criterion = torch.nn.CrossEntropyLoss()
-    # criterion = CombinedMarginLoss()
+    if params.use_arcface:
+        clf_layer = None
+        for m in model.modules():
+            clf_layer = m
+        criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+        del clf_layer
+    else:
+        criterion = torch.nn.CrossEntropyLoss()
     # optim
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
-    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, params.epochs)
+    lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.2), params.epochs)
 
     # create output directory
     output_dir = params.output_dir
@@ -126,8 +137,10 @@ def main():
     # training loop
     for epoch in range(1, params.epochs + 1):
         train_loop(train_loader, model, criterion, optimizer, epoch, params)
+        if params.use_arcface:
+            criterion.patch(model.get_submodule('fc2' if params.model == 'baseline' else 'fc'))
         if lr_scheduler is not None:
-            lr_scheduler.step(epoch - 1)
+            lr_scheduler.step()
         if epoch % params.save_freq == 0:
             torch.save(model.state_dict(), f'{output_dir}/{params.model}_{epoch:03d}.pth')
         if epoch % params.eval_freq == 0:
@@ -142,13 +155,17 @@ def train_loop(train_loader, model, criterion, optimizer, epoch, params):
         X = X.to(params.device)
         y = y.to(params.device)
 
-        logits = model(X)
-        loss = criterion(logits, y)
+        if params.use_arcface:
+            features = model.extract_features(X)
+            loss = criterion(features, y)
+        else:
+            logits = model(X)
+            loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
-        if batch_idx % 100 == 0:
+        if batch_idx % 10 == 0:
             print(f'- [Epoch {epoch:03d}/{params.epochs:03d} - {batch_idx:04d}/{len(train_loader):04d}]'
-                  f' loss={loss:.4f}')
+                  f' loss={loss:.6f}')
 
 
 @torch.no_grad()

@@ -24,7 +24,7 @@ class Baseline(nn.Module):
         self.fc1 = nn.Linear(in_features=1024, out_features=64)
         self.fc2 = nn.Linear(in_features=64, out_features=self.num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(self.relu(x))
         x = self.maxpool(x)
 
@@ -36,8 +36,11 @@ class Baseline(nn.Module):
         x = self.flatten(x)  # x = x.view(x.size(0), -1)
 
         x = self.fc1(self.relu(x))
-        x = self.fc2(self.softmax(x))
+        return x
 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.extract_features(x)
+        x = self.fc2(self.softmax(x))
         return x
 
 

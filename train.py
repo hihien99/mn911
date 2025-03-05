@@ -182,7 +182,7 @@ def eval_loop(model, data_loader, params):
         logits = model(X)
         preds = logits.argmax(1)
         correct_pred += torch.sum(preds.eq(y)).item()
-    return correct_pred.float() / len(data_loader.dataset) * 100
+    return correct_pred / len(data_loader.dataset) * 100
 
 
 if __name__ == '__main__':

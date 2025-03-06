@@ -245,7 +245,7 @@ def train_loop(train_loader, model, criterion, optimizer, metric, epoch, params)
 
 
 @torch.no_grad()
-def eval_loop(model, data_loader, criterion, epoch, metric, params):
+def eval_loop(model, data_loader, criterion, metric, epoch, params):
     model.eval()
     metric_logger = utils.MetricLogger()
     for batch_idx, (X, y) in enumerate(data_loader):

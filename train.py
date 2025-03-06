@@ -15,7 +15,7 @@ import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
-import metrics
+import torcheval.metrics as torch_metrics
 import models
 import optim
 import utils
@@ -72,6 +72,8 @@ def parse_args():
 
     parser.add_argument('--visualize', action='store_true',
                         help='train only for visualization')
+    parser.add_argument('--vis_dim', type=int, choices=[2, 3], default=3,
+                        help='visualization dimensionality')
     parser.add_argument('--vis_freq', type=int, default=5,
                         help='visualization frequency')
 
@@ -146,7 +148,7 @@ def main():
 
     # visualization wrapper
     if params.visualize:
-        model = utils.Visualizer(model).to(params.device)
+        model = utils.Visualizer(model, features=params.vis_dim).to(params.device)
         img_output_dir = os.path.join(params.output_dir, 'imgs')
         os.makedirs(img_output_dir, exist_ok=True)
 
@@ -180,15 +182,24 @@ def main():
     lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.3), params.epochs)
 
     # metrics
-    metric = metrics.Accuracy()
+    metrics = {
+        'accuracy': torch_metrics.MulticlassAccuracy(),
+        'precision': torch_metrics.MulticlassPrecision(),
+        'recall': torch_metrics.MulticlassRecall(),
+        'f1': torch_metrics.MulticlassF1Score(),
+        'auroc': torch_metrics.MulticlassAUROC(num_classes=params.num_classes),
+        'auprc': torch_metrics.MulticlassAUPRC(num_classes=params.num_classes),
+        'confusion_matrix': torch_metrics.MulticlassConfusionMatrix(num_classes=params.num_classes),
+    }
 
     # training loop
     log_f = open(os.path.join(output_dir, 'log.txt'), 'w')
     log_f.close()
     for epoch in range(1, params.epochs + 1):
+        is_eval_epoch = epoch % params.eval_freq == 0 or epoch in [1, params.epochs]
         train_stats = train_loop(
             model, train_loader, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
-            optimizer, metric, epoch, params)
+            optimizer, metrics if is_eval_epoch else {}, epoch, params)
         log_stats = {
             'epoch': epoch,
             'lr': optimizer.param_groups[0]['lr'],
@@ -197,10 +208,18 @@ def main():
         if lr_scheduler is not None:
             lr_scheduler.step()
         # eval
-        if epoch % params.eval_freq == 0:
-            eval_stats = eval_loop(model, test_loader, criterion, metric, epoch, params)
+        if is_eval_epoch:
+            eval_stats = eval_loop(model, test_loader, criterion, metrics, epoch, params)
             log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
         # log
+        for k, v in log_stats.items():
+            if torch.is_tensor(v) or isinstance(v, np.ndarray):
+                if torch.is_tensor(v):
+                    v = v.cpu()
+                csv_path = os.path.join(output_dir, str(k), f'{epoch:03d}.csv')
+                os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+                np.savetxt(csv_path, np.asarray(v), delimiter=',')
+                log_stats[k] = csv_path
         with open(os.path.join(output_dir, 'log.txt'), 'a') as log_f:
             log_f.write(json.dumps(log_stats) + '\n')
         # checkpointing
@@ -213,10 +232,22 @@ def main():
             plt.close(fig)
 
 
-def train_loop(model, train_loader, criterion, optimizer, metric, epoch, params):
+def itemize(x):
+    if torch.is_tensor(x):
+        if x.numel() == 1:
+            return x.item()
+        else:
+            return x.detach().cpu()
+    elif isinstance(x, np.ndarray) and  x.size == 1:
+        return x.item()
+    return x
+
+
+def train_loop(model, train_loader, criterion, optimizer, metrics, epoch, params):
     model.train()
+    for metric in metrics.values():
+        metric.reset()
     metric_logger = utils.MetricLogger()
-    correct_preds = 0
     for batch_idx, (X, y) in enumerate(train_loader):
         optimizer.zero_grad()
         X = X.to(params.device)
@@ -233,12 +264,12 @@ def train_loop(model, train_loader, criterion, optimizer, metric, epoch, params)
         optimizer.step()
 
         # compute stats
-        preds = logits.argmax(1)
-        correct_preds += preds.eq(y).sum().item()
-        batch_acc = metric(preds, y)
+        preds = logits.argmax(1).detach()
+        for k, metric in metrics.items():
+            metric.update((preds if not k.startswith('au') else logits.softmax(1)).cpu(), y.cpu())
         log_stats = {
             'loss': loss.item(),
-            'batch_accuracy': batch_acc.item(),
+            'batch_accuracy': torch_metrics.functional.multiclass_accuracy(preds, y).item(),
         }
         metric_logger.update(**log_stats)
 
@@ -247,16 +278,21 @@ def train_loop(model, train_loader, criterion, optimizer, metric, epoch, params)
                   f' loss={loss:.6f}')
 
     print(f'✔️ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
-    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    stats['accuracy'] = correct_preds / len(train_loader.dataset)
+    stats = {
+        **{k: itemize(metric.global_avg) for k, metric in metric_logger.meters.items()},
+        **{k: itemize(metric.compute()) for k, metric in metrics.items()}
+    }
+    for metric in metrics.values():
+        metric.reset()
     return stats
 
 
 @torch.no_grad()
-def eval_loop(model, data_loader, criterion, metric, epoch, params):
+def eval_loop(model, data_loader, criterion, metrics, epoch, params):
     model.eval()
+    for metric in metrics.values():
+        metric.reset()
     metric_logger = utils.MetricLogger()
-    correct_preds = 0
     for batch_idx, (X, y) in enumerate(data_loader):
         X = X.to(params.device)
         y = y.to(params.device)
@@ -268,20 +304,25 @@ def eval_loop(model, data_loader, criterion, metric, epoch, params):
         else:
             logits = model(X)
             loss = criterion(logits, y)
-        preds = logits.argmax(1)
-        correct_preds += preds.eq(y).sum().item()
-        batch_acc = metric(preds, y)
 
+        # compute stats
+        preds = logits.argmax(1).detach()
+        for k, metric in metrics.items():
+            metric.update((preds if not k.startswith('au') else logits.softmax(1)).cpu(), y.cpu())
         log_stats = {
             'loss': loss.item(),
-            'batch_accuracy': batch_acc.item(),
+            'batch_accuracy': torch_metrics.functional.multiclass_accuracy(preds, y).item(),
         }
         metric_logger.update(**log_stats)
 
     print(f'⭕ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
-    eval_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    eval_stats['accuracy'] = correct_preds / len(data_loader.dataset)
-    return eval_stats
+    stats = {
+        **{k: itemize(metric.global_avg) for k, metric in metric_logger.meters.items()},
+        **{k: itemize(metric.compute()) for k, metric in metrics.items()}
+    }
+    for metric in metrics.values():
+        metric.reset()
+    return stats
 
 
 @torch.no_grad()
@@ -308,19 +349,24 @@ def visualize_loop(model, train_loader, params):
     labels = np.hstack(labels)
 
     fig = plt.figure(figsize=(5, 5))
-    ax = fig.add_subplot(111, projection='3d')
+    ax = fig.add_subplot(111, projection='3d' if params.vis_dim == 3 else None)
 
     # normalize
     cmap = plt.get_cmap('tab10', params.num_classes)
     for i in range(params.num_classes):
         mask = labels == i
         feats_i = feats[mask]
-        ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
-                   marker='o', color=cmap(i), label=f'{i}')
+        if params.vis_dim == 2:
+            ax.scatter(feats_i[:, 0], feats_i[:, 1],
+                       marker='o', color=cmap(i), label=f'{i}')
+        else:
+            ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
+                       marker='o', color=cmap(i), label=f'{i}')
 
     ax.set_xlim(-1.1, 1.1)
     ax.set_ylim(-1.1, 1.1)
-    ax.set_zlim(-1.1, 1.1)
+    if params.vis_dim == 3:
+        ax.set_zlim(-1.1, 1.1)
     fig.tight_layout()
     return fig
 

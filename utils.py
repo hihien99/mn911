@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -136,9 +137,12 @@ class MetricLogger(object):
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
-            if isinstance(v, torch.Tensor):
-                v = v.item()
-            assert isinstance(v, (float, int))
+            if torch.is_tensor(v):
+                if v.numel() == 0:
+                    v = v.item()
+                else:
+                    v = v.detach().cpu().numpy()
+            assert isinstance(v, (int, float, np.ndarray))
             self.meters[k].update(v)
 
     def __getattr__(self, attr):

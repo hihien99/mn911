@@ -149,7 +149,7 @@ def main():
     # visualization wrapper
     if params.vis:
         model = utils.Visualizer(model, features=params.vis_dim).to(params.device)
-        img_output_dir = os.path.join(params.output_dir, 'imgs')
+        img_output_dir = os.path.join(output_dir, 'imgs')
         os.makedirs(img_output_dir, exist_ok=True)
 
     # loss

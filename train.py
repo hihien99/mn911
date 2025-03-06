@@ -151,7 +151,10 @@ def main():
             criterion = CurricularFace(clf_layer).to(params.device)
         elif params.loss == 'adaface':
             criterion = AdaFace(clf_layer).to(params.device)
+        else:
+            criterion = None
         del clf_layer
+        criterion.reset_parameters()
     print('Loss function:', criterion)
 
     # optim

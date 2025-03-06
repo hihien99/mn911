@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 
@@ -34,6 +35,19 @@ class Visualizer(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.extract_features(x)
         return self.fc(x)
+
+
+def plot_curve(train_acc, val_acc, title=None):
+    fig, ax = plt.subplots(1, 1, figsize=(10, 5))
+    ax.plot(train_acc, label='train_acc')
+    ax.plot(val_acc, label='val_acc')
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('accuracy')
+    ax.legend()
+    if title is not None:
+        ax.set_title(title)
+    fig.tight_layout()
+    return fig
 
 
 class tuple_inst:

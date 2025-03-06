@@ -44,6 +44,8 @@ def parse_args():
                         help='number of classes in dataset')
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train for')
+    parser.add_argument('--ce_pretrain_epochs', type=int, default=0,
+                        help='number of epochs to pretrain with CrossEntropyLoss')
     parser.add_argument('--model', required=True,
                         help='baseline | resnet18 | resnet34 | resnet50')
     parser.add_argument('--weights', default='',
@@ -68,7 +70,6 @@ def parse_args():
 
     parser.add_argument('--visualize', action='store_true',
                         help='train only for visualization')
-
     parser.add_argument('--vis_freq', type=int, default=5,
                         help='visualization frequency')
 
@@ -133,30 +134,29 @@ def main():
         model = Visualizer(model).to(params.device)
 
     # loss
+    ce_loss = torch.nn.CrossEntropyLoss()
     if params.loss == 'ce':
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = ce_loss
     elif params.loss == 'focal':
         criterion = FocalLoss()
     else:
-        clf_layer = None
-        for m in model.modules():
-            clf_layer = m  # get the last layer
+        clf_layer: nn.Linear = model.get_submodule('fc2' if params.model == 'baseline' else 'fc')
         if params.loss == 'sphereface':
-            criterion = SphereFace(clf_layer.in_features, params.num_classes).to(params.device)
+            criterion = SphereFace(clf_layer).to(params.device)
         elif params.loss == 'cosface':
-            criterion = CosFace(clf_layer.in_features, params.num_classes).to(params.device)
+            criterion = CosFace(clf_layer).to(params.device)
         elif params.loss == 'arcface':
-            criterion = ArcFace(clf_layer.in_features, params.num_classes).to(params.device)
+            criterion = ArcFace(clf_layer).to(params.device)
         elif params.loss == 'curricularface':
-            criterion = CurricularFace(clf_layer.in_features, params.num_classes).to(params.device)
+            criterion = CurricularFace(clf_layer).to(params.device)
         elif params.loss == 'adaface':
-            criterion = AdaFace(clf_layer.in_features, params.num_classes).to(params.device)
+            criterion = AdaFace(clf_layer).to(params.device)
         del clf_layer
     print('Loss function:', criterion)
 
     # optim
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
-    lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.2), params.epochs)
+    lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.3), params.epochs)
 
     # create output directory
     output_dir = params.output_dir
@@ -166,10 +166,8 @@ def main():
 
     # training loop
     for epoch in range(1, params.epochs + 1):
-        train_loop(train_loader, model, criterion, optimizer, epoch, params)
-        if params.use_margin_loss:
-            criterion.patch_output_layer(model.get_submodule('fc2' if params.model == 'baseline' else 'fc'),
-                                         remove_bias=True)
+        train_loop(train_loader, model, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
+                   optimizer, epoch, params)
         if lr_scheduler is not None:
             lr_scheduler.step()
         if epoch % params.save_freq == 0:
@@ -240,13 +238,16 @@ def visualize_loop(model, train_loader, params):
     ax = fig.add_subplot(111, projection='3d')
 
     # normalize
-    cmap = plt.get_cmap('jet', params.num_classes)
+    cmap = plt.get_cmap('tab10', params.num_classes)
     for i in range(params.num_classes):
         mask = labels == i
         feats_i = feats[mask]
         ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
                    marker='o', color=cmap(i), label=f'{i}')
 
+    ax.set_xlim(-1.1, 1.1)
+    ax.set_ylim(-1.1, 1.1)
+    ax.set_zlim(-1.1, 1.1)
     fig.tight_layout()
     return fig
 

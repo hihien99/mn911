@@ -10,15 +10,22 @@ from . import functional as my_F
 class MarginCELoss(nn.Module):
     r"""Base class for Margin-based Cross Entropy Losses."""
 
-    def __init__(self,
-                 in_features: int,
-                 out_features: int):
+    def __init__(self, output_layer: nn.Linear):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
+        self.output_layer = output_layer
+        self.patch_output_layer()
 
-        self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=torch.float32))
-        self.reset_parameters()
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.output_layer.weight
+
+    @property
+    def in_features(self) -> int:
+        return self.output_layer.in_features
+
+    @property
+    def out_features(self) -> int:
+        return self.output_layer.out_features
 
     def reset_parameters(self) -> None:
         # nn.init.xavier_uniform_(self.weight)
@@ -31,18 +38,12 @@ class MarginCELoss(nn.Module):
         output = self.compute_logits(input, target)
         return F.cross_entropy(output, target)
 
-    def patch_output_layer(self, output_layer: nn.Linear, remove_bias: bool = False) -> nn.Linear:
-        r"""
-        Update a `nn.Linear` classification layer with its weights.
-        """
-        assert isinstance(output_layer, nn.Linear)
-        output_layer.weight.data.copy_(F.normalize(self.weight))
-        if output_layer.bias is not None:
+    def patch_output_layer(self, remove_bias: bool = True) -> None:
+        if self.output_layer.bias is not None:
             if remove_bias:
-                output_layer.register_parameter('bias', None)
+                self.output_layer.register_parameter('bias', None)
             else:
-                output_layer.bias.data.fill_(0)
-        return output_layer
+                self.output_layer.bias.data.zero_()
 
     def extra_repr(self) -> str:
         return f'in_features={self.in_features}, out_features={self.out_features}'
@@ -68,11 +69,11 @@ class SphereFace(MarginCELoss):
         lambda x: 16 * x ** 5 - 20 * x ** 3 + 5 * x
     ]
 
-    def __init__(self, in_features: int, out_features: int,
+    def __init__(self, output_layer: nn.Linear,
                  margin: int = 4,
                  phi_flag: bool = True,
                  eps: float = 1e-7):
-        super().__init__(in_features, out_features)
+        super().__init__(output_layer)
         self.margin = margin
         self.phi_flag = phi_flag
         self.eps = eps
@@ -121,10 +122,10 @@ class CosFace(MarginCELoss):
     CosFace Module.
     """
 
-    def __init__(self, in_features: int, out_features: int,
+    def __init__(self, output_layer: nn.Linear,
                  scale: float = 64.0, margin: float = 0.40,
                  eps: float = 1e-7):
-        super().__init__(in_features, out_features)
+        super().__init__(output_layer)
         self.scale = scale
         self.margin = margin
         self.eps = eps
@@ -156,10 +157,10 @@ class ArcFace(MarginCELoss):
     where $m = margin$, $s = scale$.
     """
 
-    def __init__(self, in_features: int, out_features: int,
+    def __init__(self, output_layer: nn.Linear,
                  scale: float = 64.0, margin: float = 0.5, easy_margin: bool = False,
                  eps: float = 1e-7):
-        super().__init__(in_features, out_features)
+        super().__init__(output_layer)
         self.scale = scale
         self.margin = margin
         self.easy_margin = easy_margin
@@ -245,10 +246,10 @@ class CombinedMarginLoss(nn.Module):
 
 
 class CurricularFace(MarginCELoss):
-    def __init__(self, in_features: int, out_features: int,
+    def __init__(self, output_layer: nn.Linear,
                  scale: float = 64., margin: float = 0.5,
                  eps: float = 1e-7):
-        super().__init__(in_features, out_features)
+        super().__init__(output_layer)
         self.scale = scale
         self.margin = margin
         self.eps = eps
@@ -281,13 +282,13 @@ class CurricularFace(MarginCELoss):
 
 
 class AdaFace(MarginCELoss):
-    def __init__(self, in_features: int, out_features: int,
+    def __init__(self, output_layer: nn.Linear,
                  scale: float = 64.,
                  margin: float = 0.4,
                  h: float = 0.333,
                  t_alpha: float = 1.0,
                  eps: float = 1e-7):
-        super().__init__(in_features, out_features)
+        super().__init__(output_layer)
         self.scale = scale
         self.margin = margin
         self.h = h

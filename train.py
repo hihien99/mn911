@@ -381,7 +381,7 @@ def visualize_loop(model, train_loader, params):
     if params.vis_dim == 3:
         ax.set_zlim(-1.2, 1.2)
     ax.legend(loc='upper left')
-    ax.set_title('feature space')
+    ax.set_title('normalized feature space')
     fig.tight_layout()
     return fig
 

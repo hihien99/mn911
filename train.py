@@ -63,7 +63,7 @@ def parse_args():
                         help='device to use for training')
     parser.add_argument('--output_dir', default='outputs',
                         help='folder to output images and model checkpoints')
-    parser.add_argument('--save_freq', type=int, default=5,
+    parser.add_argument('--ckpt_freq', type=int, default=100,
                         help='save frequency (epochs)')
     parser.add_argument('--eval_freq', type=int, default=5,
                         help='save frequency (epochs)')
@@ -200,8 +200,8 @@ def main():
         with open(os.path.join(output_dir, 'log.txt'), 'a') as log_f:
             log_f.write(json.dumps(log_stats) + '\n')
         # checkpointing
-        if epoch % params.save_freq == 0:
-            torch.save(model.state_dict(), f'{output_dir}/{params.model}_{epoch:03d}.pth')
+        if epoch % params.ckpt_freq == 0 or epoch == params.epochs:
+            torch.save(model.state_dict(), os.path.join(output_dir, f'{params.model}_{epoch:03d}.pth'))
         # visualize
         if params.visualize and epoch % params.vis_freq == 0:
             fig = visualize_loop(model, train_loader, params)

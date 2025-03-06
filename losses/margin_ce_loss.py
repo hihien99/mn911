@@ -45,9 +45,6 @@ class MarginCELoss(nn.Module):
             else:
                 self.output_layer.bias.data.zero_()
 
-    def extra_repr(self) -> str:
-        return f'in_features={self.in_features}, out_features={self.out_features}'
-
 
 def myphi(x, m):
     x = x * m

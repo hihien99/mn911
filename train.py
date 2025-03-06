@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import random
 
@@ -14,10 +15,11 @@ import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
+import metrics
 import models
 import optim
+import utils
 from losses import *
-from utils import Visualizer, tuple_inst
 
 
 def parse_args():
@@ -30,8 +32,8 @@ def parse_args():
                         help='dataset to train on: cifar10 | mnist')
     parser.add_argument('--dataroot', default=os.path.join(project_root, 'data'),
                         help='path to dataset')
-    parser.add_argument('--data_mean', type=tuple_inst(float), default=[0.4914, 0.4822, 0.4465])
-    parser.add_argument('--data_std', type=tuple_inst(float), default=[0.2471, 0.2435, 0.2616])
+    parser.add_argument('--data_mean', type=utils.tuple_inst(float), default=[0.4914, 0.4822, 0.4465])
+    parser.add_argument('--data_std', type=utils.tuple_inst(float), default=[0.2471, 0.2435, 0.2616])
     parser.add_argument('--workers', type=int,
                         help='number of data loading workers', default=2)
     parser.add_argument('--batch_size', type=int, default=128,
@@ -81,12 +83,21 @@ def parse_args():
 
 def main():
     params = parse_args()
-    params.device = torch.device(params.device)
-    os.makedirs(params.output_dir, exist_ok=True)
 
+    # create output directory
+    output_dir = params.output_dir
+    if params.exp is not None:
+        output_dir = os.path.join(params.output_dir, params.exp)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(os.path.join(output_dir, 'params.json'), 'w') as f:
+        json.dump(vars(params), f)
+    params.device = torch.device(params.device)
+
+    # set seed
     if params.manual_seed is not None:
         print('Random Seed: ', params.manual_seed)
         random.seed(params.manual_seed)
+        np.random.seed(params.manual_seed)
         torch.manual_seed(params.manual_seed)
         if params.device.type.startswith('cuda'):
             torch.cuda.manual_seed(params.manual_seed)
@@ -131,7 +142,9 @@ def main():
 
     # visualization wrapper
     if params.visualize:
-        model = Visualizer(model).to(params.device)
+        model = utils.Visualizer(model).to(params.device)
+        img_output_dir = os.path.join(params.output_dir, 'imgs')
+        os.makedirs(img_output_dir, exist_ok=True)
 
     # loss
     ce_loss = torch.nn.CrossEntropyLoss()
@@ -159,33 +172,46 @@ def main():
 
     # optim
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
+    # scheduler
     lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.3), params.epochs)
 
-    # create output directory
-    output_dir = params.output_dir
-    if params.exp is not None:
-        output_dir = os.path.join(params.output_dir, params.exp)
-    os.makedirs(output_dir, exist_ok=True)
+    # metrics
+    metric = metrics.Accuracy()
 
     # training loop
+    log_f = open(os.path.join(output_dir, 'log.txt'), 'w')
+    log_f.close()
     for epoch in range(1, params.epochs + 1):
-        train_loop(train_loader, model, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
-                   optimizer, epoch, params)
+        train_stats = train_loop(
+            train_loader, model, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
+            optimizer, metric, epoch, params)
+        log_stats = {
+            'epoch': epoch,
+            'lr': optimizer.param_groups[0]['lr'],
+            **{f'train_{k}': v for k, v in train_stats.items()}
+        }
         if lr_scheduler is not None:
             lr_scheduler.step()
+        # eval
+        if epoch % params.eval_freq == 0:
+            eval_stats = eval_loop(model, test_loader, criterion, metric, epoch, params)
+            log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
+        # log
+        with open(os.path.join(output_dir, 'log.txt'), 'a') as log_f:
+            log_f.write(json.dumps(log_stats) + '\n')
+        # checkpointing
         if epoch % params.save_freq == 0:
             torch.save(model.state_dict(), f'{output_dir}/{params.model}_{epoch:03d}.pth')
-        if epoch % params.eval_freq == 0:
-            print(f'> [Epoch: {epoch:03d}/{params.epochs:03d}]'
-                  f' test_acc={eval_loop(model, test_loader, params):.3f}')
+        # visualize
         if params.visualize and epoch % params.vis_freq == 0:
             fig = visualize_loop(model, train_loader, params)
-            fig.savefig(f'{output_dir}/{epoch:03d}.png')
+            fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'))
             plt.close(fig)
 
 
-def train_loop(train_loader, model, criterion, optimizer, epoch, params):
+def train_loop(train_loader, model, criterion, optimizer, metric, epoch, params):
     model.train()
+    metric_logger = utils.MetricLogger()
     for batch_idx, (X, y) in enumerate(train_loader):
         optimizer.zero_grad()
         X = X.to(params.device)
@@ -193,29 +219,57 @@ def train_loop(train_loader, model, criterion, optimizer, epoch, params):
 
         if isinstance(criterion, MarginCELoss):
             features = model.extract_features(X)
+            logits = criterion.output_layer(features)
             loss = criterion(features, y)
         else:
             logits = model(X)
             loss = criterion(logits, y)
         loss.backward()
         optimizer.step()
+
+        # compute stats
+        preds = logits.argmax(1)
+        accuracy = metric(preds, y)
+        log_stats = {
+            'loss': loss.item(),
+            'accuracy': accuracy.item(),
+        }
+        metric_logger.update(**log_stats)
+
         if batch_idx % 10 == 0:
             print(f'- [Epoch {epoch:03d}/{params.epochs:03d} - {batch_idx:04d}/{len(train_loader):04d}]'
                   f' loss={loss:.6f}')
 
+    print(f'✔️ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
 
 @torch.no_grad()
-def eval_loop(model, data_loader, params):
+def eval_loop(model, data_loader, criterion, epoch, metric, params):
     model.eval()
-    correct_pred = 0
+    metric_logger = utils.MetricLogger()
     for batch_idx, (X, y) in enumerate(data_loader):
         X = X.to(params.device)
         y = y.to(params.device)
 
-        logits = model(X)
+        if isinstance(criterion, MarginCELoss):
+            features = model.extract_features(X)
+            logits = criterion.output_layer(features)
+            loss = criterion(features, y)
+        else:
+            logits = model(X)
+            loss = criterion(logits, y)
         preds = logits.argmax(1)
-        correct_pred += torch.sum(preds.eq(y)).item()
-    return correct_pred / len(data_loader.dataset) * 100
+        accuracy = metric(preds, y)
+
+        log_stats = {
+            'loss': loss.item(),
+            'accuracy': accuracy.item(),
+        }
+        metric_logger.update(**log_stats)
+
+    print(f'⭕ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
 @torch.no_grad()
@@ -224,15 +278,19 @@ def visualize_loop(model, train_loader, params):
     feats = []
     labels = []
     num_samples = 0
+    num_samples_max = 50 * params.num_classes
     for batch_idx, (X, y) in enumerate(train_loader):
+        if num_samples + X.size(0) + num_samples > num_samples_max:
+            X = X[:num_samples_max - num_samples]
+            y = y[:num_samples_max - num_samples]
         X = X.to(params.device)
         y = y.to(params.device)
 
         features = model.extract_features(X)
         feats.append(torch.nn.functional.normalize(features).cpu().numpy())
         labels.append(y.cpu().numpy())
-        num_samples += y.size(0)
-        if num_samples >= 300:
+        num_samples += X.size(0)
+        if num_samples >= num_samples_max:
             break
     feats = np.vstack(feats)
     labels = np.hstack(labels)

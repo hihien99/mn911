@@ -9,14 +9,15 @@ import argparse
 import os
 import random
 
-import torch
+import matplotlib.pyplot as plt
+import numpy as np
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 
 import models
 import optim
 from losses import *
-from utils import tuple_inst
+from utils import Visualizer, tuple_inst
 
 
 def parse_args():
@@ -64,6 +65,12 @@ def parse_args():
                         help='save frequency (epochs)')
     parser.add_argument('--manual_seed', type=int, default=None,
                         help='manual seed')
+
+    parser.add_argument('--visualize', action='store_true',
+                        help='train only for visualization')
+
+    parser.add_argument('--vis_freq', type=int, default=5,
+                        help='visualization frequency')
 
     params = parser.parse_args()
     params.use_margin_loss = params.loss not in ['ce', 'focal']
@@ -121,6 +128,10 @@ def main():
         model.load_state_dict(
             torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
 
+    # visualization wrapper
+    if params.visualize:
+        model = Visualizer(model).to(params.device)
+
     # loss
     if params.loss == 'ce':
         criterion = torch.nn.CrossEntropyLoss()
@@ -166,6 +177,10 @@ def main():
         if epoch % params.eval_freq == 0:
             print(f'> [Epoch: {epoch:03d}/{params.epochs:03d}]'
                   f' test_acc={eval_loop(model, test_loader, params):.3f}')
+        if params.visualize and epoch % params.vis_freq == 0:
+            fig = visualize_loop(model, train_loader, params)
+            fig.savefig(f'{output_dir}/{epoch:03d}.png')
+            plt.close(fig)
 
 
 def train_loop(train_loader, model, criterion, optimizer, epoch, params):
@@ -200,6 +215,40 @@ def eval_loop(model, data_loader, params):
         preds = logits.argmax(1)
         correct_pred += torch.sum(preds.eq(y)).item()
     return correct_pred / len(data_loader.dataset) * 100
+
+
+@torch.no_grad()
+def visualize_loop(model, train_loader, params):
+    model.eval()
+    feats = []
+    labels = []
+    num_samples = 0
+    for batch_idx, (X, y) in enumerate(train_loader):
+        X = X.to(params.device)
+        y = y.to(params.device)
+
+        features = model.extract_features(X)
+        feats.append(torch.nn.functional.normalize(features).cpu().numpy())
+        labels.append(y.cpu().numpy())
+        num_samples += y.size(0)
+        if num_samples >= 300:
+            break
+    feats = np.vstack(feats)
+    labels = np.hstack(labels)
+
+    fig = plt.figure(figsize=(5, 5))
+    ax = fig.add_subplot(111, projection='3d')
+
+    # normalize
+    cmap = plt.get_cmap('jet', params.num_classes)
+    for i in range(params.num_classes):
+        mask = labels == i
+        feats_i = feats[mask]
+        ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
+                   marker='o', color=cmap(i), label=f'{i}')
+
+    fig.tight_layout()
+    return fig
 
 
 if __name__ == '__main__':

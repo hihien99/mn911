@@ -64,6 +64,21 @@ class Visualizer(nn.Module):
         return self.fc(x)
 
 
+def draw_circle(ax: plt.Axes, radius: float, **kwargs):
+    return ax.add_patch(plt.Circle((0, 0), radius,
+                                   **{'color': (0, 0, 0, 0.2), 'linewidth': 0.2, 'fill': False, **kwargs}))
+
+
+def draw_globe(ax: plt.Axes, radius: float = 1, resolution: int = 100, **kwargs):
+    u = np.linspace(0, 2 * np.pi, resolution)
+    v = np.linspace(0, np.pi, resolution)
+    x = radius * np.outer(np.cos(u), np.sin(v))
+    y = radius * np.outer(np.sin(u), np.sin(v))
+    z = radius * np.outer(np.ones(np.size(u)), np.cos(v))
+    return ax.plot_wireframe(x, y, z,
+                             **{'color': (0, 0, 0, 0.2), 'linewidth': 0.2, **kwargs})
+
+
 def plot_curve(train_acc, val_acc, title=None):
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
     ax.plot(train_acc, label='train_acc')

@@ -70,7 +70,7 @@ def parse_args():
     parser.add_argument('--manual_seed', type=int, default=None,
                         help='manual seed')
 
-    parser.add_argument('--visualize', action='store_true',
+    parser.add_argument('--vis', '--visualize', action='store_true',
                         help='train only for visualization')
     parser.add_argument('--vis_dim', type=int, choices=[2, 3], default=3,
                         help='visualization dimensionality')
@@ -147,7 +147,7 @@ def main():
             torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
 
     # visualization wrapper
-    if params.visualize:
+    if params.vis:
         model = utils.Visualizer(model, features=params.vis_dim).to(params.device)
         img_output_dir = os.path.join(params.output_dir, 'imgs')
         os.makedirs(img_output_dir, exist_ok=True)
@@ -226,7 +226,7 @@ def main():
         if (params.ckpt_freq and epoch % params.ckpt_freq == 0) or epoch == params.epochs:
             torch.save(model.state_dict(), os.path.join(output_dir, f'{params.model}_{epoch:03d}.pth'))
         # visualize
-        if params.visualize and epoch % params.vis_freq == 0:
+        if params.vis and epoch % params.vis_freq == 0:
             fig = visualize_loop(model, train_loader, params)
             fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'))
             plt.close(fig)
@@ -340,12 +340,13 @@ def visualize_loop(model, train_loader, params):
         y = y.to(params.device)
 
         features = model.extract_features(X)
-        feats.append(torch.nn.functional.normalize(features).cpu().numpy())
+        feats.append(features.cpu().numpy())
         labels.append(y.cpu().numpy())
         num_samples += X.size(0)
         if num_samples >= num_samples_max:
             break
     feats = np.vstack(feats)
+    feats_norm = feats / np.linalg.norm(feats, axis=1, keepdims=True)
     labels = np.hstack(labels)
 
     fig = plt.figure(figsize=(5, 5))
@@ -356,17 +357,31 @@ def visualize_loop(model, train_loader, params):
     for i in range(params.num_classes):
         mask = labels == i
         feats_i = feats[mask]
+        feats_norm_i = feats_norm[mask]
+        lines = np.vstack([feats_i[np.newaxis], feats_norm_i[np.newaxis]]).transpose((1, 0, 2))
         if params.vis_dim == 2:
+            from matplotlib.collections import LineCollection
             ax.scatter(feats_i[:, 0], feats_i[:, 1],
-                       marker='o', color=cmap(i), label=f'{i}')
+                        marker='^', color=cmap(i, 0.2))
+            ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1],
+                        marker='o', color=cmap(i), label=f'{i}')
+            ax.add_collection(LineCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
+            utils.draw_circle(ax, radius=1)
         else:
+            from mpl_toolkits.mplot3d.art3d import Line3DCollection
             ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
-                       marker='o', color=cmap(i), label=f'{i}')
+                        marker='^', color=cmap(i, 0.2))
+            ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1], feats_norm_i[:, 2],
+                        marker='o', color=cmap(i), label=f'{i}')
+            ax.add_collection(Line3DCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
+            utils.draw_globe(ax, radius=1)
 
-    ax.set_xlim(-1.1, 1.1)
-    ax.set_ylim(-1.1, 1.1)
+    ax.set_xlim(-1.2, 1.2)
+    ax.set_ylim(-1.2, 1.2)
     if params.vis_dim == 3:
-        ax.set_zlim(-1.1, 1.1)
+        ax.set_zlim(-1.2, 1.2)
+    ax.legend(loc='upper left')
+    ax.set_title('feature space')
     fig.tight_layout()
     return fig
 

@@ -183,7 +183,7 @@ def main():
     log_f.close()
     for epoch in range(1, params.epochs + 1):
         train_stats = train_loop(
-            train_loader, model, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
+            model, train_loader, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
             optimizer, metric, epoch, params)
         log_stats = {
             'epoch': epoch,
@@ -209,9 +209,10 @@ def main():
             plt.close(fig)
 
 
-def train_loop(train_loader, model, criterion, optimizer, metric, epoch, params):
+def train_loop(model, train_loader, criterion, optimizer, metric, epoch, params):
     model.train()
     metric_logger = utils.MetricLogger()
+    correct_preds = 0
     for batch_idx, (X, y) in enumerate(train_loader):
         optimizer.zero_grad()
         X = X.to(params.device)
@@ -229,10 +230,11 @@ def train_loop(train_loader, model, criterion, optimizer, metric, epoch, params)
 
         # compute stats
         preds = logits.argmax(1)
-        accuracy = metric(preds, y)
+        correct_preds += preds.eq(y).sum().item()
+        batch_acc = metric(preds, y)
         log_stats = {
             'loss': loss.item(),
-            'accuracy': accuracy.item(),
+            'batch_accuracy': batch_acc.item(),
         }
         metric_logger.update(**log_stats)
 
@@ -241,13 +243,16 @@ def train_loop(train_loader, model, criterion, optimizer, metric, epoch, params)
                   f' loss={loss:.6f}')
 
     print(f'✔️ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats['accuracy'] = correct_preds / len(train_loader.dataset)
+    return stats
 
 
 @torch.no_grad()
 def eval_loop(model, data_loader, criterion, metric, epoch, params):
     model.eval()
     metric_logger = utils.MetricLogger()
+    correct_preds = 0
     for batch_idx, (X, y) in enumerate(data_loader):
         X = X.to(params.device)
         y = y.to(params.device)
@@ -260,16 +265,19 @@ def eval_loop(model, data_loader, criterion, metric, epoch, params):
             logits = model(X)
             loss = criterion(logits, y)
         preds = logits.argmax(1)
-        accuracy = metric(preds, y)
+        correct_preds += preds.eq(y).sum().item()
+        batch_acc = metric(preds, y)
 
         log_stats = {
             'loss': loss.item(),
-            'accuracy': accuracy.item(),
+            'batch_accuracy': batch_acc.item(),
         }
         metric_logger.update(**log_stats)
 
     print(f'⭕ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    eval_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    eval_stats['accuracy'] = correct_preds / len(data_loader.dataset)
+    return eval_stats
 
 
 @torch.no_grad()

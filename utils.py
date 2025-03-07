@@ -64,6 +64,56 @@ class Visualizer(nn.Module):
         return self.fc(x)
 
 
+def visualize_feature_space(feats, labels, num_classes=None, normalized=True):
+    vis_dim = feats.shape[1]
+    feats_norm = feats / np.linalg.norm(feats, axis=1, keepdims=True) if normalized else None
+    fig = plt.figure(figsize=(5, 5))
+    ax = fig.add_subplot(111, projection='3d' if vis_dim == 3 else None)
+
+    num_classes = num_classes if num_classes is not None else len(np.unique(labels))
+    cmap = plt.get_cmap('tab10', num_classes)
+    for i in range(num_classes):
+        mask = labels == i
+        feats_i = feats[mask]
+        if normalized:
+            feats_norm_i = feats_norm[mask]
+            lines = np.vstack([feats_i[np.newaxis], feats_norm_i[np.newaxis]]).transpose((1, 0, 2))
+        if vis_dim == 2:
+            if not normalized:
+                ax.scatter(feats_i[:, 0], feats_i[:, 1],
+                            marker='o', color=cmap(i), label=f'{i}')
+            else:
+                from matplotlib.collections import LineCollection
+                ax.scatter(feats_i[:, 0], feats_i[:, 1],
+                            marker='^', color=cmap(i, 0.2))
+                ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1],
+                            marker='o', color=cmap(i), label=f'{i}')
+                ax.add_collection(LineCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
+                draw_circle(ax, radius=1)
+        else:
+            if not normalized:
+                ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
+                            marker='o', color=cmap(i), label=f'{i}')
+            else:
+                from mpl_toolkits.mplot3d.art3d import Line3DCollection
+                ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
+                            marker='^', color=cmap(i, 0.2))
+                ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1], feats_norm_i[:, 2],
+                            marker='o', color=cmap(i), label=f'{i}')
+                ax.add_collection(Line3DCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
+                draw_globe(ax, radius=1)
+
+    if normalized:
+        ax.set_xlim(-1.2, 1.2)
+        ax.set_ylim(-1.2, 1.2)
+        if vis_dim == 3:
+            ax.set_zlim(-1.2, 1.2)
+    ax.legend(loc='upper left')
+    ax.set_title('feature space')
+    fig.tight_layout()
+    return fig
+
+
 def draw_circle(ax: plt.Axes, radius: float, **kwargs):
     return ax.add_patch(plt.Circle((0, 0), radius,
                                    **{'color': (0, 0, 0, 0.2), 'linewidth': 0.2, 'fill': False, **kwargs}))

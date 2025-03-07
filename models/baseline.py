@@ -13,12 +13,11 @@ class Baseline(nn.Module):
         self.img_channels = img_channels
         self.num_classes = num_classes
 
-        self.conv1 = nn.Conv2d(in_channels=img_channels, out_channels=32, kernel_size=3, stride=1, padding=0,
-                               bias=False)
-        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=1, padding=0, bias=False)
-        self.conv3 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=0, bias=False)
+        self.conv1 = nn.Conv2d(in_channels=img_channels, out_channels=32, kernel_size=3)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.conv3 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3)
         self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.maxpool = nn.MaxPool2d(kernel_size=2)
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(in_features=1024, out_features=64)
         self.fc2 = nn.Linear(in_features=64, out_features=self.num_classes)

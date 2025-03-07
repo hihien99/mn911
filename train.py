@@ -67,6 +67,8 @@ def parse_args():
                         help='save frequency (epochs)')
     parser.add_argument('--eval_freq', type=int, default=5,
                         help='save frequency (epochs)')
+    parser.add_argument('--eval_only', action='store_true',
+                        help='run only evaluation')
     parser.add_argument('--manual_seed', type=int, default=None,
                         help='manual seed')
 
@@ -90,6 +92,8 @@ def main():
     output_dir = params.output_dir
     if params.exp is not None:
         output_dir = os.path.join(params.output_dir, params.exp)
+    if params.eval_only:
+        output_dir = os.path.join(output_dir, 'eval')
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, 'params.json'), 'w') as f:
         json.dump(vars(params), f)
@@ -142,9 +146,12 @@ def main():
     except:
         raise ValueError(f'Model {params.model} is not defined')
 
-    if params.weights != '':
+    if len(params.weights):
         model.load_state_dict(
             torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
+        print(f'Loaded weights from {params.weights}')
+    elif not params.eval_only:
+        raise ValueError('No weights provided for evaluation')
 
     # visualization wrapper
     if params.vis:
@@ -193,43 +200,65 @@ def main():
     }
 
     # training loop
-    log_f = open(os.path.join(output_dir, 'log.txt'), 'w')
-    log_f.close()
-    for epoch in range(1, params.epochs + 1):
-        is_eval_epoch = epoch % params.eval_freq == 0 or epoch in [1, params.epochs]
-        train_stats = train_loop(
-            model, train_loader, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
-            optimizer, metrics if is_eval_epoch else {}, epoch, params)
+    log_file_path = os.path.join(output_dir, 'log.txt')
+    if params.eval_only:
         log_stats = {
-            'epoch': epoch,
-            'lr': optimizer.param_groups[0]['lr'],
-            **{f'train_{k}': v for k, v in train_stats.items()}
+            'epoch': 'eval',
         }
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-        # eval
-        if is_eval_epoch:
-            eval_stats = eval_loop(model, test_loader, criterion, metrics, epoch, params)
-            log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
+        eval_stats = eval_loop(model, test_loader, criterion, metrics, None, params)
+        log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
+        # visualize
+        if params.vis:
+            fig = visualize_loop(model, train_loader, params)
+            fig.savefig(os.path.join(img_output_dir, f'eval.png'))
+            plt.close(fig)
         # log
         for k, v in log_stats.items():
             if torch.is_tensor(v) or isinstance(v, np.ndarray):
                 if torch.is_tensor(v):
                     v = v.cpu()
-                csv_path = os.path.join(output_dir, str(k), f'{epoch:03d}.csv')
+                csv_path = os.path.join(output_dir, f'{k}.csv')
                 os.makedirs(os.path.dirname(csv_path), exist_ok=True)
                 np.savetxt(csv_path, np.asarray(v), delimiter=',')
                 log_stats[k] = csv_path
-        with open(os.path.join(output_dir, 'log.txt'), 'a') as log_f:
+        with open(log_file_path, 'a') as log_f:
             log_f.write(json.dumps(log_stats) + '\n')
-        # checkpointing
-        if (params.ckpt_freq and epoch % params.ckpt_freq == 0) or epoch == params.epochs:
-            torch.save(model.state_dict(), os.path.join(output_dir, f'{params.model}_{epoch:03d}.pth'))
-        # visualize
-        if params.vis and epoch % params.vis_freq == 0:
-            fig = visualize_loop(model, train_loader, params)
-            fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'))
-            plt.close(fig)
+    else:
+        for epoch in range(1, params.epochs + 1):
+            is_eval_epoch = epoch % params.eval_freq == 0 or epoch in [1, params.epochs]
+            train_stats = train_loop(
+                model, train_loader, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
+                optimizer, metrics if is_eval_epoch else {}, epoch, params)
+            log_stats = {
+                'epoch': epoch,
+                'lr': optimizer.param_groups[0]['lr'],
+                **{f'train_{k}': v for k, v in train_stats.items()}
+            }
+            if lr_scheduler is not None:
+                lr_scheduler.step()
+            # eval
+            if is_eval_epoch:
+                eval_stats = eval_loop(model, test_loader, criterion, metrics, epoch, params)
+                log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
+            # log
+            for k, v in log_stats.items():
+                if torch.is_tensor(v) or isinstance(v, np.ndarray):
+                    if torch.is_tensor(v):
+                        v = v.cpu()
+                    csv_path = os.path.join(output_dir, str(k), f'{epoch:03d}.csv')
+                    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+                    np.savetxt(csv_path, np.asarray(v), delimiter=',')
+                    log_stats[k] = csv_path
+            with open(log_file_path, 'a') as log_f:
+                log_f.write(json.dumps(log_stats) + '\n')
+            # checkpointing
+            if (params.ckpt_freq and epoch % params.ckpt_freq == 0) or epoch == params.epochs:
+                torch.save(model.state_dict(), os.path.join(output_dir, f'{params.model}_{epoch:03d}.pth'))
+            # visualize
+            if params.vis and epoch % params.vis_freq == 0:
+                fig = visualize_loop(model, train_loader, params)
+                fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'))
+                plt.close(fig)
 
 
 def itemize(x):
@@ -315,7 +344,10 @@ def eval_loop(model, data_loader, criterion, metrics, epoch, params):
         }
         metric_logger.update(**log_stats)
 
-    print(f'⭕ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
+    if epoch:
+        print(f'⭕ [Epoch {epoch:03d}/{params.epochs:03d}]', metric_logger)
+    else:
+        print('⭕ [Eval]', metric_logger)
     stats = {
         **{k: itemize(metric.global_avg) for k, metric in metric_logger.meters.items()},
         **{k: itemize(metric.compute()) for k, metric in metrics.items()}
@@ -346,44 +378,8 @@ def visualize_loop(model, train_loader, params):
         if num_samples >= num_samples_max:
             break
     feats = np.vstack(feats)
-    feats_norm = feats / np.linalg.norm(feats, axis=1, keepdims=True)
     labels = np.hstack(labels)
-
-    fig = plt.figure(figsize=(5, 5))
-    ax = fig.add_subplot(111, projection='3d' if params.vis_dim == 3 else None)
-
-    # normalize
-    cmap = plt.get_cmap('tab10', params.num_classes)
-    for i in range(params.num_classes):
-        mask = labels == i
-        feats_i = feats[mask]
-        feats_norm_i = feats_norm[mask]
-        lines = np.vstack([feats_i[np.newaxis], feats_norm_i[np.newaxis]]).transpose((1, 0, 2))
-        if params.vis_dim == 2:
-            from matplotlib.collections import LineCollection
-            ax.scatter(feats_i[:, 0], feats_i[:, 1],
-                        marker='^', color=cmap(i, 0.2))
-            ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1],
-                        marker='o', color=cmap(i), label=f'{i}')
-            ax.add_collection(LineCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
-            utils.draw_circle(ax, radius=1)
-        else:
-            from mpl_toolkits.mplot3d.art3d import Line3DCollection
-            ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
-                        marker='^', color=cmap(i, 0.2))
-            ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1], feats_norm_i[:, 2],
-                        marker='o', color=cmap(i), label=f'{i}')
-            ax.add_collection(Line3DCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
-            utils.draw_globe(ax, radius=1)
-
-    ax.set_xlim(-1.2, 1.2)
-    ax.set_ylim(-1.2, 1.2)
-    if params.vis_dim == 3:
-        ax.set_zlim(-1.2, 1.2)
-    ax.legend(loc='upper left')
-    ax.set_title('feature space')
-    fig.tight_layout()
-    return fig
+    return utils.visualize_feature_space(feats, labels, num_classes=params.num_classes)
 
 
 if __name__ == '__main__':

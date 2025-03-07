@@ -64,7 +64,7 @@ class Visualizer(nn.Module):
         return self.fc(x)
 
 
-def visualize_feature_space(feats, labels, num_classes=None, normalized=True):
+def visualize_feature_space(feats, labels, num_classes=None, normalized=True, title=None):
     vis_dim = feats.shape[1]
     feats_norm = feats / np.linalg.norm(feats, axis=1, keepdims=True) if normalized else None
     fig = plt.figure(figsize=(5, 5))
@@ -109,7 +109,10 @@ def visualize_feature_space(feats, labels, num_classes=None, normalized=True):
         if vis_dim == 3:
             ax.set_zlim(-1.2, 1.2)
     ax.legend(loc='upper left')
-    ax.set_title('feature space')
+    if title is not None:
+        ax.set_title(title)
+    else:
+        ax.set_title('feature space' if not normalized else 'normalized feature space')
     fig.tight_layout()
     return fig
 

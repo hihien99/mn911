@@ -150,7 +150,7 @@ def main():
         model.load_state_dict(
             torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
         print(f'Loaded weights from {params.weights}')
-    elif not params.eval_only:
+    elif params.eval_only:
         raise ValueError('No weights provided for evaluation')
 
     # visualization wrapper
@@ -166,7 +166,8 @@ def main():
     elif params.loss == 'focal':
         criterion = FocalLoss()
     else:
-        clf_layer: nn.Linear = model.get_submodule('fc2' if params.model == 'baseline' else 'fc')
+        clf_layer_name = 'fc2' if params.model == 'baseline' else 'fc'
+        clf_layer: nn.Linear = model.get_submodule(clf_layer_name)
         if params.loss == 'sphereface':
             criterion = SphereFace(clf_layer).to(params.device)
         elif params.loss == 'cosface':
@@ -181,7 +182,9 @@ def main():
             criterion = None
         del clf_layer
         criterion.reset_parameters()
+        model = criterion.patch_model(model, clf_layer_name)
     print('Loss function:', criterion)
+    print(model)
 
     # optim
     optimizer = torch.optim.AdamW(model.parameters(), lr=params.lr)
@@ -284,8 +287,8 @@ def train_loop(model, train_loader, criterion, optimizer, metrics, epoch, params
 
         if isinstance(criterion, MarginCELoss):
             features = model.extract_features(X)
-            logits = criterion.output_layer(features)
             loss = criterion(features, y)
+            logits = criterion.compute_logits(features)
         else:
             logits = model(X)
             loss = criterion(logits, y)
@@ -328,8 +331,8 @@ def eval_loop(model, data_loader, criterion, metrics, epoch, params):
 
         if isinstance(criterion, MarginCELoss):
             features = model.extract_features(X)
-            logits = criterion.output_layer(features)
             loss = criterion(features, y)
+            logits = criterion.compute_logits(features)
         else:
             logits = model(X)
             loss = criterion(logits, y)

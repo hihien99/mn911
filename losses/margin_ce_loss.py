@@ -7,13 +7,35 @@ import torch.nn.functional as F
 from . import functional as my_F
 
 
+class MarginCELinear(nn.Linear):
+    def __init__(self, in_features: int, out_features: int,
+                 dtype=None, device=None):
+        super().__init__(in_features, out_features, bias=False, dtype=dtype, device=device)
+
+    @classmethod
+    def from_output_layer(cls, output_layer: nn.Linear) -> 'MarginCELinear':
+        layer = cls(output_layer.in_features, output_layer.out_features)
+        layer.to(dtype=output_layer.weight.dtype, device=output_layer.weight.device)
+        layer.weight.data.copy_(output_layer.weight.data)
+        layer.requires_grad_(output_layer.weight.requires_grad)
+        return layer
+
+    def linear(self, input: torch.Tensor) -> torch.Tensor:
+        return F.linear(input, self.weight)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return F.linear(F.normalize(input), F.normalize(self.weight))
+
+
 class MarginCELoss(nn.Module):
     r"""Base class for Margin-based Cross Entropy Losses."""
 
-    def __init__(self, output_layer: nn.Linear):
+    def __init__(self, output_layer: nn.Linear,
+                 eps: float = 1e-7):
         super().__init__()
         self.output_layer = output_layer
         self.patch_output_layer()
+        self.eps = eps
 
     @property
     def weight(self) -> torch.Tensor:
@@ -31,12 +53,18 @@ class MarginCELoss(nn.Module):
         # nn.init.xavier_uniform_(self.weight)
         self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
 
-    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def compute_logits(self, input: torch.Tensor) -> torch.Tensor:
+        return F.linear(F.normalize(input), F.normalize(self.output_layer.weight))
+
+    def compute_cosine(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
+    def compute_loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return F.cross_entropy(logits, target)
+
     def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        output = self.compute_logits(input, target)
-        return F.cross_entropy(output, target)
+        logits = self.compute_cosine(input, target)
+        return self.compute_loss(logits, target)
 
     def patch_output_layer(self, remove_bias: bool = True) -> None:
         if self.output_layer.bias is not None:
@@ -44,6 +72,12 @@ class MarginCELoss(nn.Module):
                 self.output_layer.register_parameter('bias', None)
             else:
                 self.output_layer.bias.data.zero_()
+
+    def patch_model(self, model: nn.Module, output_module_name: str) -> nn.Module:
+        output_layer = model.get_submodule(output_module_name)
+        assert isinstance(output_layer, nn.Linear)
+        model.set_submodule(output_module_name, MarginCELinear.from_output_layer(output_layer))
+        return model
 
 
 def myphi(x, m):
@@ -70,10 +104,9 @@ class SphereFace(MarginCELoss):
                  margin: int = 4,
                  phi_flag: bool = True,
                  eps: float = 1e-7):
-        super().__init__(output_layer)
+        super().__init__(output_layer, eps=eps)
         self.margin = margin
         self.phi_flag = phi_flag
-        self.eps = eps
         self.base = 1000.0
         self.gamma = 0.12
         self.power = 1
@@ -83,11 +116,11 @@ class SphereFace(MarginCELoss):
         # duplication formula
         self.mlambda = self.mlambdas[margin]
 
-    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def compute_cosine(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         self.iter += 1
         self.lamb = max(self.lambda_min, self.base * (1 + self.gamma * self.iter) ** (-1 * self.power))
 
-        cos_theta = F.linear(F.normalize(input), F.normalize(self.weight)).clamp(-1 + self.eps, 1 - self.eps)
+        cos_theta = self.compute_logits(input)
         if self.phi_flag:
             cos_m_theta = self.mlambda(cos_theta)
             theta = cos_theta.data.acos()
@@ -106,9 +139,8 @@ class SphereFace(MarginCELoss):
 
         return output
 
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        output = self.compute_logits(input, target)
-        return my_F.focal_loss(output, target)
+    def compute_loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return my_F.focal_loss(logits, target)
 
     def extra_repr(self) -> str:
         return f'margin={self.margin}, phi_flag={self.phi_flag}'
@@ -122,13 +154,12 @@ class CosFace(MarginCELoss):
     def __init__(self, output_layer: nn.Linear,
                  scale: float = 64.0, margin: float = 0.40,
                  eps: float = 1e-7):
-        super().__init__(output_layer)
+        super().__init__(output_layer, eps=eps)
         self.scale = scale
         self.margin = margin
-        self.eps = eps
 
-    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+    def compute_cosine(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        cosine = self.compute_logits(input)
         phi = cosine - self.margin
         one_hot = torch.zeros(cosine.size(), dtype=torch.bool, device=input.device)
         one_hot.scatter_(1, target.view(-1, 1).long(), 1)
@@ -157,7 +188,7 @@ class ArcFace(MarginCELoss):
     def __init__(self, output_layer: nn.Linear,
                  scale: float = 64.0, margin: float = 0.5, easy_margin: bool = False,
                  eps: float = 1e-7):
-        super().__init__(output_layer)
+        super().__init__(output_layer, eps=eps)
         self.scale = scale
         self.margin = margin
         self.easy_margin = easy_margin
@@ -166,10 +197,9 @@ class ArcFace(MarginCELoss):
         self.sin_m = math.sin(margin)
         self.th = math.cos(math.pi - margin)
         self.mm = math.sin(math.pi - margin) * margin
-        self.eps = eps
 
-    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        cosine = F.linear(F.normalize(input), F.normalize(self.weight)).clamp(-1 + self.eps, 1 - self.eps)
+    def compute_cosine(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        cosine = self.compute_logits(input)
         sine = torch.sqrt((1.0 - torch.pow(cosine, 2)).clamp(-1 + self.eps, 1 - self.eps))
         phi = cosine * self.cos_m - sine * self.sin_m
         if self.easy_margin:
@@ -187,69 +217,13 @@ class ArcFace(MarginCELoss):
         return f'scale={self.scale}, margin={self.margin}, easy_margin={self.easy_margin}'
 
 
-class CombinedMarginLoss(nn.Module):
-    def __init__(self,
-                 s: float = 64.0,
-                 m1: float = 1.0,
-                 m2: float = 0.5,
-                 m3: float = 0.0,
-                 interclass_filtering_threshold: float = 0.0):
-        super().__init__()
-        self.s = s
-        self.m1 = m1
-        self.m2 = m2
-        self.m3 = m3
-        self.interclass_filtering_threshold = interclass_filtering_threshold
-
-        # For ArcFace
-        self.cos_m = math.cos(self.m2)
-        self.sin_m = math.sin(self.m2)
-        self.theta = math.cos(math.pi - self.m2)
-        self.sinmm = math.sin(math.pi - self.m2) * self.m2
-        self.easy_margin = False
-
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        index_positive = torch.where(target != -1)[0]
-
-        if self.interclass_filtering_threshold > 0:
-            with torch.no_grad():
-                dirty = input > self.interclass_filtering_threshold
-                dirty = dirty.float()
-                mask = torch.ones([index_positive.size(0), input.size(1)], device=input.device)
-                mask.scatter_(1, target[index_positive], 0)
-                dirty[index_positive] *= mask
-                tensor_mul = 1 - dirty
-            input = tensor_mul * input
-
-        target_logit = input[index_positive, target[index_positive].view(-1)]
-
-        if self.m1 == 1.0 and self.m3 == 0.0:
-            with torch.no_grad():
-                target_logit.arccos_()
-                input.arccos_()
-                final_target_logit = target_logit + self.m2
-                input[index_positive, target[index_positive].view(-1)] = final_target_logit
-                input.cos_()
-            input = input * self.s
-
-        elif self.m3 > 0:
-            final_target_logit = target_logit - self.m3
-            input[index_positive, target[index_positive].view(-1)] = final_target_logit
-            input = input * self.s
-        else:
-            raise
-
-        return input
-
-
 class CurricularFace(MarginCELoss):
     def __init__(self, output_layer: nn.Linear,
                  scale: float = 64., margin: float = 0.5,
                  eps: float = 1e-7):
-        super().__init__(output_layer)
+        super().__init__(output_layer, eps=eps)
         self.scale = scale
         self.margin = margin
-        self.eps = eps
 
         self.cos_m = math.cos(margin)
         self.sin_m = math.sin(margin)
@@ -257,8 +231,8 @@ class CurricularFace(MarginCELoss):
         self.mm = math.sin(math.pi - margin) * margin
         self.register_buffer('t', torch.zeros(1))
 
-    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        cos_theta = F.linear(F.normalize(input), F.normalize(self.weight)).clamp(-1 + self.eps, 1 - self.eps)
+    def compute_cosine(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        cos_theta = self.compute_logits(input)
         target_logit = cos_theta[torch.arange(0, input.size(0)), target].view(-1, 1)
 
         sin_theta = torch.sqrt(1.0 - torch.pow(target_logit, 2))
@@ -278,6 +252,70 @@ class CurricularFace(MarginCELoss):
         return f'scale={self.scale}, margin={self.margin}'
 
 
+class MagFace(MarginCELoss):
+    r"""
+    MagFace module.
+    """
+
+    def __init__(self, out_layer: nn.Linear,
+                 scale: float = 64.0,
+                 l_a: float = 10, u_a: float = 110, l_margin: float = 0.45, u_margin: float = 0.8,
+                 easy_margin: bool = True,
+                 lambda_g: float = 20.0,
+                 eps: float = 1e-7):
+        super().__init__(out_layer, eps=eps)
+        self.scale = scale
+        self.l_a = l_a
+        self.u_a = u_a
+        self.l_margin = l_margin
+        self.u_margin = u_margin
+        self.easy_margin = easy_margin
+        self.lambda_g = lambda_g
+
+    def compute_cosine(self, x, m):
+        """
+        Here m is a function which generate adaptive margin
+        """
+        x_norm = torch.norm(x, dim=1, keepdim=True).clamp(self.l_a, self.u_a)
+        ada_margin = m(x_norm)
+        cos_m, sin_m = torch.cos(ada_margin), torch.sin(ada_margin)
+
+        # norm the weight
+        weight_norm = F.normalize(self.weight, dim=0)
+        cos_theta = torch.mm(F.normalize(x), weight_norm)
+        cos_theta = cos_theta.clamp(-1, 1)
+        sin_theta = torch.sqrt(1.0 - torch.pow(cos_theta, 2))
+        cos_theta_m = cos_theta * cos_m - sin_theta * sin_m
+        if self.easy_margin:
+            cos_theta_m = torch.where(cos_theta > 0, cos_theta_m, cos_theta)
+        else:
+            mm = torch.sin(math.pi - ada_margin) * ada_margin
+            threshold = torch.cos(math.pi - ada_margin)
+            cos_theta_m = torch.where(
+                cos_theta > threshold, cos_theta_m, cos_theta - mm)
+        # multiply the scale in advance
+        cos_theta_m = self.scale * cos_theta_m
+        cos_theta = self.scale * cos_theta
+
+        one_hot = torch.zeros_like(cos_theta)
+        one_hot.scatter_(1, target.view(-1, 1), 1.0)
+        output = one_hot * cos_theta_m + (1.0 - one_hot) * cos_theta
+
+        # regularizer
+        return [cos_theta, cos_theta_m], x_norm
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        output = self.compute_cosine(input, target)
+        g = torch.mean(1 / (self.u_a ** 2) * x_norm + 1 / x_norm)
+        return my_F.focal_loss(output, target) + self.lambda_g * g
+
+    def extra_repr(self) -> str:
+        return (f'scale={self.scale}, '
+                f'a_bound={(self.l_a, self.u_a)}, '
+                f'margin_bound={(self.l_margin, self.u_margin)}, '
+                f'lambda_g={self.lambda_g}')
+
+
 class AdaFace(MarginCELoss):
     def __init__(self, output_layer: nn.Linear,
                  scale: float = 64.,
@@ -285,18 +323,17 @@ class AdaFace(MarginCELoss):
                  h: float = 0.333,
                  t_alpha: float = 1.0,
                  eps: float = 1e-7):
-        super().__init__(output_layer)
+        super().__init__(output_layer, eps=eps)
         self.scale = scale
         self.margin = margin
         self.h = h
-        self.eps = eps
 
         # ema prep
         self.t_alpha = t_alpha
         self.register_buffer('batch_mean', torch.tensor(20.))
         self.register_buffer('batch_std', torch.tensor(100.))
 
-    def compute_logits(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def compute_cosine(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         norms = torch.norm(input, 2, dim=-1, keepdim=True)
         cosine = F.linear(input / norms, F.normalize(self.weight)).clamp(-1 + self.eps, 1 - self.eps)
         safe_norms = torch.clip(norms, min=self.eps, max=100).clone().detach()  # for stability

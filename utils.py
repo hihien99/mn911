@@ -111,8 +111,6 @@ def visualize_feature_space(feats, labels, num_classes=None, normalized=True, ti
     ax.legend(loc='upper left')
     if title is not None:
         ax.set_title(title)
-    else:
-        ax.set_title('feature space' if not normalized else 'normalized feature space')
     fig.tight_layout()
     return fig
 

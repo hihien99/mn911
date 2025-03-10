@@ -114,12 +114,7 @@ def main():
         root=params.dataroot, download=True,
         train=True,
         transform=transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=(0.8, 1.2),
-                                   contrast=(0.8, 1.2),
-                                   saturation=(0.8, 1.2),
-                                   hue=(-0.1, 0.1)),
+            transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.CIFAR10),
             transforms.ToTensor(),
             transforms.Normalize(params.data_mean, params.data_std),
         ])
@@ -145,13 +140,6 @@ def main():
             img_channels=params.img_channels, num_classes=params.num_classes).to(params.device)
     except:
         raise ValueError(f'Model {params.model} is not defined')
-
-    if len(params.weights):
-        model.load_state_dict(
-            torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
-        print(f'Loaded weights from {params.weights}')
-    elif params.eval_only:
-        raise ValueError('No weights provided for evaluation')
 
     # visualization wrapper
     if params.vis:
@@ -184,6 +172,13 @@ def main():
         criterion.reset_parameters()
         model = criterion.patch_model(model, clf_layer_name)
     print('Loss function:', criterion)
+
+    if len(params.weights):
+        model.load_state_dict(
+            torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
+        print(f'Loaded weights from {params.weights}')
+    elif params.eval_only:
+        raise ValueError('No weights provided for evaluation')
     print(model)
 
     # optim

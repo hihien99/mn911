@@ -64,7 +64,8 @@ class Visualizer(nn.Module):
         return self.fc(x)
 
 
-def visualize_feature_space(feats, labels, num_classes=None, normalized=True, title=None):
+def visualize_feature_space(feats, labels, num_classes=None, class_names=None,
+                            normalized=True, title=None):
     vis_dim = feats.shape[1]
     feats_norm = feats / np.linalg.norm(feats, axis=1, keepdims=True) if normalized else None
     fig = plt.figure(figsize=(5, 5))
@@ -78,28 +79,29 @@ def visualize_feature_space(feats, labels, num_classes=None, normalized=True, ti
         if normalized:
             feats_norm_i = feats_norm[mask]
             lines = np.vstack([feats_i[np.newaxis], feats_norm_i[np.newaxis]]).transpose((1, 0, 2))
+        label = f'{i}' if class_names is None else class_names[i]
         if vis_dim == 2:
             if not normalized:
                 ax.scatter(feats_i[:, 0], feats_i[:, 1],
-                            marker='o', color=cmap(i), label=f'{i}')
+                            marker='o', color=cmap(i), label=label)
             else:
                 from matplotlib.collections import LineCollection
                 ax.scatter(feats_i[:, 0], feats_i[:, 1],
                             marker='^', color=cmap(i, 0.2))
                 ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1],
-                            marker='o', color=cmap(i), label=f'{i}')
+                            marker='o', color=cmap(i), label=label)
                 ax.add_collection(LineCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
                 draw_circle(ax, radius=1)
         else:
             if not normalized:
                 ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
-                            marker='o', color=cmap(i), label=f'{i}')
+                            marker='o', color=cmap(i), label=label)
             else:
                 from mpl_toolkits.mplot3d.art3d import Line3DCollection
                 ax.scatter(feats_i[:, 0], feats_i[:, 1], feats_i[:, 2],
                             marker='^', color=cmap(i, 0.2))
                 ax.scatter(feats_norm_i[:, 0], feats_norm_i[:, 1], feats_norm_i[:, 2],
-                            marker='o', color=cmap(i), label=f'{i}')
+                            marker='o', color=cmap(i), label=label)
                 ax.add_collection(Line3DCollection(lines, colors=cmap(i, 0.1), linewidths=0.1))
                 draw_globe(ax, radius=1)
 

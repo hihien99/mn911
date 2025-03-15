@@ -2,24 +2,24 @@ import argparse
 import json
 import os
 
+import tikzplotlib
 from matplotlib import pyplot as plt
 
 
 class MetricAggregator:
     def __init__(self):
-        self.data = {}
         self.metrics = []
-        self.epochs = {'train': [], 'val': [], 'test': []}
+        self.data = {}
+        self.epochs = {}
 
     def clear(self):
         self.data.clear()
         self.metrics.clear()
-        for k, v in self.epochs.items():
-            v.clear()
+        self.epochs.clear()
 
     def update(self, data: dict):
         for k, v in data.items():
-            if '_' not in k or isinstance(v, str):
+            if k == 'epoch':
                 continue
             if (metric := k[k.find('_') + 1:]) not in self.metrics:
                 self.metrics.append(metric)
@@ -27,9 +27,10 @@ class MetricAggregator:
                 self.data[k] = [v]
             else:
                 self.data[k].append(v)
-            epoch_list = self.epoch_list(k)
-            if not len(epoch_list) or epoch_list[-1] != data['epoch']:
-                epoch_list.append(data['epoch'])
+            if k not in self.epochs:
+                self.epochs[k] = [data['epoch']]
+            else:
+                self.epochs[k].append(data['epoch'])
 
     def keys(self):
         return self.data.keys()
@@ -41,8 +42,7 @@ class MetricAggregator:
         return self.data.items()
 
     def epoch_list(self, k):
-        assert k != 'epoch'
-        return self.epochs[k.split('_')[0]]
+        return self.epochs[k]
 
     def __getitem__(self, k):
         return self.data[k]
@@ -64,6 +64,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    plt.style.use('ggplot')
 
     output_dir = args.output_dir
     if args.exp is not None:
@@ -83,22 +84,35 @@ def main():
     parts = ['train', 'val', 'test']
     os.makedirs(fig_save_dir, exist_ok=True)
     for metric in m.metrics:
+        print(metric)
         fig, ax = plt.subplots()
 
         max_epoch = -1
+        lines = []
+        if (k := metric) in m:
+            lines.append(
+                ax.plot(el := m.epoch_list(k), m[k], marker='x', color=cmap(0))
+            )
+            max_epoch = max(el[-1], max_epoch)
         for part in parts:
             if (k := f'{part}_{metric}') in m:
-                ax.plot(el := m.epoch_list(k), m[k], marker='x', color=cmap(parts.index(part)), label=part)
+                lines.append(
+                    ax.plot(el := m.epoch_list(k), m[k], marker='x', color=cmap(parts.index(part)), label=part)
+                )
                 max_epoch = max(el[-1], max_epoch)
         plt.minorticks_on()
         ax.grid(True, which='both')
+        ax.set_xlabel('epoch')
+        ax.set_ylabel(metric)
         ax.set_xlim(0, max_epoch)
         ax.set_ylim(0, ax.get_ylim()[1])
-        ax.set_title(metric)
-        ax.legend()
+        if len(lines) > 1:
+            ax.legend()
+        # ax.set_title(metric)
 
         fig.tight_layout()
-        fig.savefig(os.path.join(fig_save_dir, metric + '.png'))
+        fig.savefig(os.path.join(fig_save_dir, metric + '.png'), transparent=True)
+        tikzplotlib.save(os.path.join(fig_save_dir, metric + '.tex'))
         plt.close(fig)
 
 

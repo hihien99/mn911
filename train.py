@@ -44,13 +44,15 @@ def parse_args():
                         help='the height / width of the input image to network')
     parser.add_argument('--num_classes', type=int, default=10,
                         help='number of classes in dataset')
+    parser.add_argument('--class_names', type=utils.tuple_inst(str),
+                        default=['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'])
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train for')
     parser.add_argument('--ce_pretrain_epochs', type=int, default=0,
                         help='number of epochs to pretrain with CrossEntropyLoss')
     parser.add_argument('--model', required=True,
                         help='baseline | resnet18 | resnet34 | resnet50')
-    parser.add_argument('--weights', default='',
+    parser.add_argument('--resume_from', default='',
                         help='path to pre-trained weights (to continue training)')
     parser.add_argument('--loss',
                         choices=['ce', 'focal', 'sphereface', 'cosface', 'arcface', 'curricularface', 'adaface'],
@@ -144,8 +146,8 @@ def main():
     try:
         model = getattr(models, params.model)(
             img_channels=params.img_channels, num_classes=params.num_classes).to(params.device)
-    except:
-        raise ValueError(f'Model {params.model} is not defined')
+    except AttributeError:
+        raise AttributeError(f'Model {params.model} is not defined')
 
     # visualization wrapper
     if params.vis:
@@ -179,10 +181,10 @@ def main():
         model = criterion.patch_model(model, clf_layer_name)
     print('Loss function:', criterion)
 
-    if len(params.weights):
+    if len(params.resume_from):
         model.load_state_dict(
-            torch.load(params.weights, weights_only=False, map_location=params.device), strict=False)
-        print(f'Loaded weights from {params.weights}')
+            torch.load(params.resume_from, weights_only=False, map_location=params.device), strict=False)
+        print(f'Loaded weights from {params.resume_from}')
     elif params.eval_only:
         raise ValueError('No weights provided for evaluation')
     print(model)
@@ -383,7 +385,9 @@ def visualize_loop(model, train_loader, params):
             break
     feats = np.vstack(feats)
     labels = np.hstack(labels)
-    return utils.visualize_feature_space(feats, labels, num_classes=params.num_classes)
+    return utils.visualize_feature_space(feats, labels,
+                                         num_classes=params.num_classes,
+                                         class_names=params.class_names)
 
 
 if __name__ == '__main__':

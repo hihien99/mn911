@@ -331,7 +331,7 @@ def train_loop(model, train_loader, criterion, optimizer, metrics, epoch, params
         preds = logits.argmax(1).detach()
         for k, metric in metrics.items():
             if k == 'grad_norm':
-                metric.update(params.grad_sniffer.output_grad)
+                metric.update(params.grad_sniffer.grad_output)
                 params.grad_sniffer.delete_grad()
             else:
                 metric.update((preds if not k.startswith('au') else logits.softmax(1)).cpu(), y.cpu())

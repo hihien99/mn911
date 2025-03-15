@@ -290,8 +290,10 @@ class GradNormSniffer(nn.Module):
         self.grad_input = self.grad_output = None
 
     def __call__(self, module, grad_input, grad_output):
-        self.grad_input = torch.linalg.norm(grad_input[0].flatten(1), ord=self.p, dim=1).cpu()
-        self.grad_output = torch.linalg.norm(grad_output.flatten(1), ord=self.p, dim=1).cpu()
+        if grad_input[0] is not None:
+            self.grad_input = torch.linalg.norm(grad_input[0].flatten(1), ord=self.p, dim=1).cpu()
+        if grad_output is not None:
+            self.grad_output = torch.linalg.norm(grad_output.flatten(1), ord=self.p, dim=1).cpu()
 
 
 def itemize(x):

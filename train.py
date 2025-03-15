@@ -48,8 +48,6 @@ def parse_args():
                         default=['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'])
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train for')
-    parser.add_argument('--ce_pretrain_epochs', type=int, default=0,
-                        help='number of epochs to pretrain with CrossEntropyLoss')
     parser.add_argument('--model', required=True,
                         help='baseline | resnet18 | resnet34 | resnet50')
     parser.add_argument('--resume_from', default='',
@@ -69,6 +67,8 @@ def parse_args():
                         help='save frequency (epochs)')
     parser.add_argument('--eval_freq', type=int, default=5,
                         help='save frequency (epochs)')
+    parser.add_argument('--log_grad', action='store_true',
+                        help='log gradient norm passed through the network')
     parser.add_argument('--eval_only', action='store_true',
                         help='run only evaluation')
     parser.add_argument('--manual_seed', type=int, default=None,
@@ -156,9 +156,8 @@ def main():
         os.makedirs(img_output_dir, exist_ok=True)
 
     # loss
-    ce_loss = torch.nn.CrossEntropyLoss()
     if params.loss == 'ce':
-        criterion = ce_loss
+        criterion = torch.nn.CrossEntropyLoss()
     elif params.loss == 'focal':
         criterion = FocalLoss()
     else:
@@ -195,7 +194,7 @@ def main():
     lr_scheduler = optim.lr_scheduler.WarmupCosineLR(optimizer, int(params.epochs * 0.3), params.epochs)
 
     # metrics
-    metrics = {
+    train_metrics = {
         'accuracy': torch_metrics.MulticlassAccuracy(),
         'precision': torch_metrics.MulticlassPrecision(),
         'recall': torch_metrics.MulticlassRecall(),
@@ -204,6 +203,20 @@ def main():
         'auprc': torch_metrics.MulticlassAUPRC(num_classes=params.num_classes),
         'confusion_matrix': torch_metrics.MulticlassConfusionMatrix(num_classes=params.num_classes),
     }
+    val_metrics = {k: v for k, v in train_metrics.items()}
+    if params.log_grad:
+        train_metrics.update({
+            'grad_norm': torch_metrics.Mean(),
+        })
+        first_layer: nn.Conv2d = None
+        for module in model.modules():
+            if isinstance(module, nn.Conv2d):
+                first_layer = module
+                break
+        grad_sniffer = GradNormSniffer()
+        first_layer.register_backward_hook(grad_sniffer)
+        params.grad_sniffer = grad_sniffer
+        del first_layer
 
     # training loop
     log_file_path = os.path.join(output_dir, 'log.txt')
@@ -211,7 +224,7 @@ def main():
         log_stats = {
             'epoch': 'eval',
         }
-        eval_stats = eval_loop(model, test_loader, criterion, metrics, None, params)
+        eval_stats = eval_loop(model, test_loader, criterion, val_metrics, None, params)
         log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
         # visualize
         if params.vis:
@@ -233,8 +246,8 @@ def main():
         for epoch in range(1, params.epochs + 1):
             is_eval_epoch = epoch % params.eval_freq == 0 or epoch in [1, params.epochs]
             train_stats = train_loop(
-                model, train_loader, criterion if epoch > params.ce_pretrain_epochs else ce_loss,
-                optimizer, metrics if is_eval_epoch else {}, epoch, params)
+                model, train_loader, criterion,
+                optimizer, train_metrics if is_eval_epoch else {}, epoch, params)
             log_stats = {
                 'epoch': epoch,
                 'lr': optimizer.param_groups[0]['lr'],
@@ -244,7 +257,7 @@ def main():
                 lr_scheduler.step()
             # eval
             if is_eval_epoch:
-                eval_stats = eval_loop(model, test_loader, criterion, metrics, epoch, params)
+                eval_stats = eval_loop(model, test_loader, criterion, val_metrics, epoch, params)
                 log_stats = {**log_stats, **{f'val_{k}': v for k, v in eval_stats.items()}}
             # log
             for k, v in log_stats.items():
@@ -265,6 +278,20 @@ def main():
                 fig = visualize_loop(model, train_loader, params)
                 fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'))
                 plt.close(fig)
+
+
+class GradNormSniffer(nn.Module):
+    def __init__(self, p=2):
+        super().__init__()
+        self.p = p
+        self.grad_input = self.grad_output = None
+
+    def delete_grad(self):
+        self.grad_input = self.grad_output = None
+
+    def __call__(self, module, grad_input: torch.Tensor, grad_output: torch.Tensor):
+        self.grad_input = torch.linalg.norm(grad_input.flatten(1), ord=self.p, dim=1).cpu()
+        self.grad_output = torch.linalg.norm(grad_output.flatten(1), ord=self.p, dim=1).cpu()
 
 
 def itemize(x):
@@ -301,7 +328,11 @@ def train_loop(model, train_loader, criterion, optimizer, metrics, epoch, params
         # compute stats
         preds = logits.argmax(1).detach()
         for k, metric in metrics.items():
-            metric.update((preds if not k.startswith('au') else logits.softmax(1)).cpu(), y.cpu())
+            if k == 'grad_norm':
+                metric.update(params.grad_sniffer.output_grad)
+                params.grad_sniffer.delete_grad()
+            else:
+                metric.update((preds if not k.startswith('au') else logits.softmax(1)).cpu(), y.cpu())
         log_stats = {
             'loss': loss.item(),
             'batch_accuracy': torch_metrics.functional.multiclass_accuracy(preds, y).item(),

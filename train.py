@@ -289,8 +289,8 @@ class GradNormSniffer(nn.Module):
     def delete_grad(self):
         self.grad_input = self.grad_output = None
 
-    def __call__(self, module, grad_input: torch.Tensor, grad_output: torch.Tensor):
-        self.grad_input = torch.linalg.norm(grad_input.flatten(1), ord=self.p, dim=1).cpu()
+    def __call__(self, module, grad_input, grad_output):
+        self.grad_input = torch.linalg.norm(grad_input[0].flatten(1), ord=self.p, dim=1).cpu()
         self.grad_output = torch.linalg.norm(grad_output.flatten(1), ord=self.p, dim=1).cpu()
 
 

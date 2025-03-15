@@ -1,58 +1,31 @@
 """
-PlaneNet architectures modified for low resolution images
+PlainNet architectures modified for low resolution images
 """
 from typing import List, Optional, Type, Union, Callable
 
 import torch
 import torch.nn as nn
 
-__all__ = ['PlaneNet', 'planenet18', 'planenet34', 'planenet50', 'planenet']
+from .resnet import conv3x3, conv1x1
+
+__all__ = ['PlainNet', 'plainnet18', 'plainnet34', 'plainnet50', 'plainnet']
 
 
-def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
-    r"""
-    3x3 convolution with padding
-    """
-    return nn.Conv2d(
-        in_planes,
-        out_planes,
-        kernel_size=3,
-        stride=stride,
-        padding=dilation,
-        groups=groups,
-        bias=False,
-        dilation=dilation
-    )
-
-
-def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
-    r"""
-    1x1 convolution
-    """
-    return nn.Conv2d(
-        in_planes,
-        out_planes,
-        kernel_size=1,
-        stride=stride,
-        bias=False
-    )
-
-
-class BasicBlock(nn.Module):
+class PlainBlock(nn.Module):
     expansion = 1
 
     def __init__(
             self,
-            inplanes: int,
-            planes: int,
+            inplains: int,
+            plains: int,
             stride: int = 1,
             downsample: Optional[nn.Module] = None) -> None:
-        super(BasicBlock, self).__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
+        super(PlainBlock, self).__init__()
+        self.conv1 = conv3x3(inplains, plains, stride)
+        self.bn1 = nn.BatchNorm2d(plains)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv2 = conv3x3(plains, plains)
+        self.bn2 = nn.BatchNorm2d(plains)
         self.stride = stride
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -66,32 +39,32 @@ class BasicBlock(nn.Module):
         return out
 
 
-class Bottleneck(nn.Module):
+class PlainBottleneck(nn.Module):
     expansion = 4
 
     def __init__(
             self,
-            inplanes: int,
-            planes: int,
+            inplains: int,
+            plains: int,
             stride: int = 1,
             downsample: Optional[nn.Module] = None,
             group: int = 1,
             dilation: int = 1,
             base_width: int = 64,
             norm_layer: Optional[Callable[..., nn.Module]] = None) -> None:
-        super(Bottleneck, self).__init__()
+        super(PlainBottleneck, self).__init__()
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
 
-        width = int(planes * (base_width / 64.0)) * group
+        width = int(plains * (base_width / 64.0)) * group
 
-        self.conv1 = conv1x1(inplanes, width)
+        self.conv1 = conv1x1(inplains, width)
         self.bn1 = norm_layer(width)
         self.conv2 = conv3x3(width, width, stride, group, dilation)
         self.bn2 = norm_layer(width)
-        self.conv3 = conv1x1(width, planes * self.expansion)
-        self.bn3 = norm_layer(planes * self.expansion)
+        self.conv3 = conv1x1(width, plains * self.expansion)
+        self.bn3 = norm_layer(plains * self.expansion)
         self.relu = nn.ReLU(inplace=True)
         self.stride = stride
 
@@ -110,27 +83,27 @@ class Bottleneck(nn.Module):
         return out
 
 
-class PlaneNet(nn.Module):
+class PlainNet(nn.Module):
 
     def __init__(
             self,
-            block: Type[Union[BasicBlock, Bottleneck]],
+            block: Type[Union[PlainBlock, PlainBottleneck]],
             layers: List[int],
             num_classes: int = 10,
             img_channels: int = 3,
             zero_init_residual: bool = True,
             low_resolution: bool = True) -> None:
-        super(PlaneNet, self).__init__()
-        self.inplanes = 64
+        super(PlainNet, self).__init__()
+        self.inplains = 64
         self.img_channels = img_channels
         self.num_classes = num_classes
 
         if low_resolution:
             # for small datasets: kernel_size 7 -> 3, stride 2 -> 1, padding 3 -> 1
-            self.conv1 = nn.Conv2d(self.img_channels, self.inplanes, kernel_size=3, stride=1, padding=1, bias=False)
+            self.conv1 = nn.Conv2d(self.img_channels, self.inplains, kernel_size=3, stride=1, padding=1, bias=False)
         else:
-            self.conv1 = nn.Conv2d(self.img_channels, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(self.inplanes)
+            self.conv1 = nn.Conv2d(self.img_channels, self.inplains, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(self.inplains)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
@@ -156,28 +129,28 @@ class PlaneNet(nn.Module):
         # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
         if zero_init_residual:
             for m in self.modules():
-                if isinstance(m, Bottleneck):
+                if isinstance(m, PlainBottleneck):
                     nn.init.constant_(m.bn3.weight, 0)
-                elif isinstance(m, BasicBlock):
+                elif isinstance(m, PlainBlock):
                     nn.init.constant_(m.bn2.weight, 0)
 
     def _make_layer(self,
-                    block: Type[Union[BasicBlock, Bottleneck]],
-                    planes: int,
+                    block: Type[Union[PlainBlock, PlainBottleneck]],
+                    plains: int,
                     blocks: int,
                     stride: int = 1):
         downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
+        if stride != 1 or self.inplains != plains * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion)
+                nn.Conv2d(self.inplains, plains * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(plains * block.expansion)
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
+        layers.append(block(self.inplains, plains, stride, downsample))
+        self.inplains = plains * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
+            layers.append(block(self.inplains, plains))
 
         return nn.Sequential(*layers)
 
@@ -202,41 +175,41 @@ class PlaneNet(nn.Module):
         return logits
 
 
-def planenet18(num_classes: int = 10, img_channels: int = 3, low_resolution: bool = True) -> PlaneNet:
-    r"""Constructs a PlaneNet-18 model (ResNet-18 without skip connections).
+def plainnet18(num_classes: int = 10, img_channels: int = 3, low_resolution: bool = True) -> PlainNet:
+    r"""Constructs a PlainNet-18 model (ResNet-18 without skip connections).
 
     Args:
         num_classes (int): Number of classes.
         img_channels (int): Number of image channels.
         low_resolution (bool): Use low resolution variant or not.
     """
-    return PlaneNet(BasicBlock, [2, 2, 2, 2], num_classes, img_channels, low_resolution=low_resolution)
+    return PlainNet(PlainBlock, [2, 2, 2, 2], num_classes, img_channels, low_resolution=low_resolution)
 
 
-def planenet34(num_classes: int = 10, img_channels: int = 3, low_resolution: bool = True) -> PlaneNet:
-    r"""Constructs a PlaneNet-34 model (ResNet-34 without skip connections).
-
-    Args:
-        num_classes (int): Number of classes.
-        img_channels (int): Number of image channels.
-        low_resolution (bool): Use low resolution variant or not.
-    """
-    return PlaneNet(BasicBlock, [3, 4, 6, 3], num_classes, img_channels, low_resolution=low_resolution)
-
-
-def planenet50(num_classes: int = 10, img_channels: int = 3, low_resolution: bool = True) -> PlaneNet:
-    r"""Constructs a PlaneNet-50 model (ResNet-50 without skip connections).
+def plainnet34(num_classes: int = 10, img_channels: int = 3, low_resolution: bool = True) -> PlainNet:
+    r"""Constructs a PlainNet-34 model (ResNet-34 without skip connections).
 
     Args:
         num_classes (int): Number of classes.
         img_channels (int): Number of image channels.
         low_resolution (bool): Use low resolution variant or not.
     """
-    return PlaneNet(Bottleneck, [3, 4, 6, 3], num_classes, img_channels, low_resolution=low_resolution)
+    return PlainNet(PlainBlock, [3, 4, 6, 3], num_classes, img_channels, low_resolution=low_resolution)
 
 
-def planenet(depth: int, *args, **kwargs) -> PlaneNet:
-    r"""Constructs a PlaneNet model (ResNet without skip connections)
+def plainnet50(num_classes: int = 10, img_channels: int = 3, low_resolution: bool = True) -> PlainNet:
+    r"""Constructs a PlainNet-50 model (ResNet-50 without skip connections).
+
+    Args:
+        num_classes (int): Number of classes.
+        img_channels (int): Number of image channels.
+        low_resolution (bool): Use low resolution variant or not.
+    """
+    return PlainNet(PlainBottleneck, [3, 4, 6, 3], num_classes, img_channels, low_resolution=low_resolution)
+
+
+def plainnet(depth: int, *args, **kwargs) -> PlainNet:
+    r"""Constructs a PlainNet model (ResNet without skip connections)
     given a pre-defined depth.
 
     Args:

@@ -1,3 +1,3 @@
 from .baseline import *
-from .planenet import *
+from .plainnet import *
 from .resnet import *

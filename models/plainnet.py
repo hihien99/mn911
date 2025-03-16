@@ -18,8 +18,7 @@ class PlainBlock(nn.Module):
             self,
             inplains: int,
             plains: int,
-            stride: int = 1,
-            downsample: Optional[nn.Module] = None) -> None:
+            stride: int = 1) -> None:
         super(PlainBlock, self).__init__()
         self.conv1 = conv3x3(inplains, plains, stride)
         self.bn1 = nn.BatchNorm2d(plains)
@@ -47,7 +46,6 @@ class PlainBottleneck(nn.Module):
             inplains: int,
             plains: int,
             stride: int = 1,
-            downsample: Optional[nn.Module] = None,
             group: int = 1,
             dilation: int = 1,
             base_width: int = 64,
@@ -91,7 +89,6 @@ class PlainNet(nn.Module):
             layers: List[int],
             num_classes: int = 10,
             img_channels: int = 3,
-            zero_init_residual: bool = True,
             low_resolution: bool = True) -> None:
         super(PlainNet, self).__init__()
         self.inplains = 64
@@ -115,39 +112,23 @@ class PlainNet(nn.Module):
 
         self.fc = nn.Linear(512 * block.expansion, self.num_classes)
 
-        self.reset_parameters(zero_init_residual)
+        self.reset_parameters()
 
-    def reset_parameters(self, zero_init_residual: bool = True) -> None:
+    def reset_parameters(self) -> None:
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             elif isinstance(m, nn.BatchNorm2d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-        # Zero-initialize the last BN in each residual branch,
-        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
-        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
-        if zero_init_residual:
-            for m in self.modules():
-                if isinstance(m, PlainBottleneck):
-                    nn.init.constant_(m.bn3.weight, 0)
-                elif isinstance(m, PlainBlock):
-                    nn.init.constant_(m.bn2.weight, 0)
 
     def _make_layer(self,
                     block: Type[Union[PlainBlock, PlainBottleneck]],
                     plains: int,
                     blocks: int,
                     stride: int = 1):
-        downsample = None
-        if stride != 1 or self.inplains != plains * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplains, plains * block.expansion, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(plains * block.expansion)
-            )
-
         layers = []
-        layers.append(block(self.inplains, plains, stride, downsample))
+        layers.append(block(self.inplains, plains, stride))
         self.inplains = plains * block.expansion
         for i in range(1, blocks):
             layers.append(block(self.inplains, plains))

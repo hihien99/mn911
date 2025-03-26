@@ -229,7 +229,7 @@ def main():
         # visualize
         if params.vis:
             fig = visualize_loop(model, train_loader, params)
-            fig.savefig(os.path.join(img_output_dir, f'eval.png'))
+            fig.savefig(os.path.join(img_output_dir, f'eval.png'), transparent=True)
             plt.close(fig)
         # log
         for k, v in log_stats.items():
@@ -276,7 +276,7 @@ def main():
             # visualize
             if params.vis and epoch % params.vis_freq == 0:
                 fig = visualize_loop(model, train_loader, params)
-                fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'))
+                fig.savefig(os.path.join(img_output_dir, f'{epoch:03d}.png'), transparent=True)
                 plt.close(fig)
 
 

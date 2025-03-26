@@ -41,17 +41,17 @@ This will split the last fully-connected layer in two with the intermediate dime
 Note that this visualization method drastically reduce the performance of the model.
 The obtained results would look like these:
 
-<table>
+<table align="center" style="margin: 0px auto;">
   <caption>Normalized Feature Space of ResNet-18</caption>
   <tr>
     <th>
       <p align="center">
-      <img src="resources/resnet18_ce_norm_feature_space.png" height="200"/>
+      <img src="resources/resnet18_ce_norm_feature_space.png" height="300"/>
       </p>
     </th>
     <th>
       <p align="center">
-      <img src="resources/resnet18_adaface_norm_feature_space.png" height="200"/>
+      <img src="resources/resnet18_adaface_norm_feature_space.png" height="300"/>
       </p>
     </th>
   </tr>
@@ -78,4 +78,4 @@ This project was conducted under the supervision of **Prof. Dijana Petrovska**.
 
 ## License
 
-MIT licensed, see [`LICENSE.txt`](LICENSE.txt)
+MIT licensed, see [`LICENSE.txt`](LICENSE.txt).
